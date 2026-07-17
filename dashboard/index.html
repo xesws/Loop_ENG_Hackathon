@@ -21,7 +21,8 @@
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
-       font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+       font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+       display:flex;flex-direction:column;height:100vh}
   html.stage body{font-size:16px}
   header{display:flex;align-items:baseline;gap:14px;padding:10px 18px;flex-wrap:wrap;
          border-bottom:1px solid var(--line);background:var(--panel)}
@@ -33,14 +34,17 @@
   header .meta{font-size:13px;color:var(--ink)}
   header .meta b{color:var(--running)}
   #controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  #controls button{font:13px ui-monospace,monospace;color:var(--ink);background:#21262d;
-    border:1px solid var(--line);border-radius:7px;padding:7px 13px;cursor:pointer}
+  #controls button{font:13px ui-monospace,monospace;color:var(--ink);background:#21262d;    border:1px solid var(--line);border-radius:7px;padding:7px 13px;cursor:pointer}
   #controls button:hover:not(:disabled){border-color:var(--running)}
   #controls button:disabled{opacity:.4;cursor:not-allowed}
   #demoBtn{background:var(--verified);color:#0d1117;font-weight:700;border-color:var(--verified);
     font-size:14px;padding:7px 16px}
   #demoExtBtn{background:var(--stale);color:#0d1117;font-weight:700;border-color:var(--stale);
     font-size:14px;padding:7px 16px}
+  #controls input{font:13px ui-monospace,monospace;color:var(--ink);background:#0d1117;
+    border:1px solid var(--line);border-radius:7px;padding:7px 10px}
+  #controls input:disabled{opacity:.4}
+  #rBtn{background:var(--running);color:#0d1117;font-weight:700;border-color:var(--running)}
   #connbar{display:none;background:var(--killed);color:#fff;text-align:center;
     font-weight:700;padding:5px;font-size:13px}
   #connbar.show{display:block}
@@ -52,7 +56,7 @@
   html.stage #bannerText{font-size:40px}
   #bannerText small{display:block;color:var(--dim);font-size:16px;font-weight:400;margin-top:12px}
   html.stage #bannerText small{font-size:22px}
-  #wrap{display:flex;height:calc(100vh - 46px)}
+  #wrap{display:flex;flex:1;min-height:0}
   #graphwrap{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
   #graph{flex:1;min-height:0}
   #narration{border-top:1px solid var(--line);background:#11161d;padding:12px 18px;
@@ -130,6 +134,59 @@
   #hovercard b{color:var(--ink)}#hovercard .k{color:var(--dim)}
   #hovercard .hl{font-weight:700;font-size:14px;margin-bottom:5px}
   html.stage #hovercard .hl{font-size:17px}
+  /* M15 evidence drawer — click an incident card; main UI untouched otherwise */
+  .inc{cursor:pointer}
+  .inc:hover{border-color:var(--running)}
+  #drawer{position:fixed;top:0;right:0;height:100vh;width:392px;max-width:94vw;z-index:50;
+    background:rgba(13,17,23,.98);border-left:1px solid var(--line);
+    box-shadow:-14px 0 36px rgba(0,0,0,.6);transform:translateX(106%);
+    transition:transform .3s cubic-bezier(.2,.9,.3,1);padding:16px 18px 24px;
+    overflow-y:auto;font-size:13px;line-height:1.5}
+  #drawer.show{transform:translateX(0)}
+  #drawer h3{margin:0 2px 2px;font-size:14px;letter-spacing:.02em}
+  #drawer .sub{color:var(--dim);font-size:12px;margin:0 2px 10px}
+  #drawer .drow{border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin:10px 0;
+    background:#161b22}
+  #drawer .drow .k{color:var(--dim);font-size:11px;text-transform:uppercase;
+    letter-spacing:.08em;display:block;margin-bottom:5px}
+  #drawer .withheld{color:var(--killed);font-weight:800;border:1px solid var(--killed);
+    border-radius:6px;padding:1px 7px;margin:4px 0 0 8px;font-size:12px;
+    display:inline-block;white-space:nowrap}
+  #drawer .hashrow{font-family:ui-monospace,monospace;font-size:12.5px;border-radius:7px;
+    padding:6px 8px;margin:3px 0;display:flex;justify-content:space-between;gap:10px}
+  #drawer .mismatch{background:rgba(248,81,73,.14);outline:1px solid var(--killed);color:#ffb3ad}
+  #drawer .fnote{color:var(--dim);font-size:12px;border-top:1px dashed var(--line);
+    padding-top:10px;margin-top:14px}
+  #dclose{position:absolute;top:10px;right:12px;background:none;border:1px solid var(--line);
+    color:var(--dim);border-radius:7px;font:14px ui-monospace,monospace;padding:2px 9px;
+    cursor:pointer}
+  #dclose:hover{color:var(--ink);border-color:var(--running)}
+  /* run-info panels (Run / Nodes / Prompt tabs) */
+  #panels{border-top:1px solid var(--line);background:#0d1117;flex:none}
+  #ptabs{display:flex;gap:4px;padding:5px 12px 0;align-items:center}
+  #ptabs button{font:12px ui-monospace,monospace;background:none;border:1px solid var(--line);
+    border-bottom:none;border-radius:7px 7px 0 0;color:var(--dim);padding:5px 14px;cursor:pointer}
+  #ptabs button.on{color:var(--ink);background:#161b22;border-color:var(--running)}
+  #ptabs button:hover{color:var(--ink)}
+  #pclose{margin-left:auto;border-radius:7px!important;border-bottom:1px solid var(--line)!important}
+  #pbody{height:196px;overflow-y:auto;padding:10px 16px;font-size:12.5px;line-height:1.55}
+  #panels.closed #pbody{display:none}
+  .pgrid{display:flex;gap:22px;flex-wrap:wrap}
+  .pcol{min-width:280px;flex:1}
+  .pk{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.07em;margin-right:6px}
+  .pulse{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--verified);
+    margin-right:7px;animation:pp 1s ease infinite}
+  @keyframes pp{50%{opacity:.25}}
+  .idledot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--dim);
+    margin-right:7px;opacity:.6}
+  table.nt{border-collapse:collapse;width:100%;font-size:12px}
+  table.nt td,table.nt th{border-bottom:1px solid #21262d;padding:3px 8px;text-align:left;
+    vertical-align:top}
+  table.nt th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase}
+  .pblock{border:1px solid var(--line);border-radius:8px;margin:8px 0;background:#161b22}
+  .pblock .ph{padding:5px 10px;color:var(--dim);font-size:11.5px;border-bottom:1px solid var(--line)}
+  .pblock pre{margin:0;padding:8px 10px;white-space:pre-wrap;word-break:break-word;
+    font-size:11.8px;max-height:160px;overflow-y:auto;color:var(--ink);font-family:ui-monospace,monospace}
 </style>
 </head>
 <body>
@@ -146,6 +203,9 @@
     <button class="sc" data-s="trap_taint">trap_taint</button>
     <button id="demoBtn">▶ DEMO</button>
     <button id="demoExtBtn">▶ DEMO+</button>
+    <input id="rq" type="text" placeholder="type a research question…" size="26"
+           title="one sentence in — planner + full-live run (M12)">
+    <button id="rBtn" title="plan + run it live">Run</button>
   </div>
   <div class="meta">tick <b id="tick">–</b> · report <b id="rv">–</b> · <span id="conn" class="disc">connecting…</span></div>
 </header>
@@ -169,6 +229,29 @@
     <div id="incidents"></div>
     <div id="legend"></div>
   </aside>
+</div>
+<div id="panels">
+  <div id="ptabs">
+    <button data-t="run" class="on">Run</button>
+    <button data-t="nodes">Nodes</button>
+    <button data-t="prompt">Prompt</button>
+    <button id="pclose" title="collapse / expand">✕</button>
+  </div>
+  <div id="pbody">
+    <div id="pc-run"></div>
+    <div id="pc-nodes" style="display:none"></div>
+    <div id="pc-prompt" style="display:none"></div>
+  </div>
+</div>
+<div id="drawer" aria-hidden="true">
+  <button id="dclose" title="close (Esc)">✕</button>
+  <h3>Evidence drawer</h3>
+  <div class="sub" id="dsub"></div>
+  <div class="drow" id="dverdict"></div>
+  <div class="drow" id="dhash"></div>
+  <div class="drow" id="dchain"></div>
+  <div class="fnote">门只做哈希相等性判断，不读意图。<br>
+    The gate checks hash equality only — never intent.</div>
 </div>
 <script>
 const C = { running:'#2f81f7', verified:'#3fb950', stale:'#d29922', blocked:'#8b949e',
@@ -364,6 +447,7 @@ async function poll(){
     for(const k in focusCounters){if(focusCounters[k]>0){focus.add(k);focusCounters[k]--;}else delete focusCounters[k];}
     render(s,flash,focus);
     renderIncidents(s.incidents||[]);
+    renderRun();renderNodes();
     if(narrHold>0)narrHold--; else setNarr('SUPERVISOR',describeState(s),'var(--running)');
   }catch(e){
     document.getElementById('conn').textContent='disconnected';document.getElementById('conn').className='disc';
@@ -374,6 +458,8 @@ function renderIncidents(incs){
   const box=document.getElementById('incidents');box.innerHTML='';
   for(const i of incs.slice(-10).reverse()){
     const d=document.createElement('div');d.className='inc'+(KEY.has(i.type)?' key':'');
+    d.title='click for evidence';
+    d.onclick=()=>openDrawer(i);
     const col=RUNG[i.ladder_action]||'#8b949e';d.style.borderLeftColor=col;
     const ev=Object.entries(i.evidence||{}).slice(0,3)
       .map(([k,v])=>`${k}=${typeof v==='object'?JSON.stringify(v):v}`).join(' · ');
@@ -385,6 +471,7 @@ function renderIncidents(incs){
 }
 async function loadQuestion(){
   try{const g=await (await fetch('/plan_cached.json',{cache:'no-store'})).json();
+    PLAN=g;
     document.getElementById('question').textContent=g.research_question||'';}
   catch(e){document.getElementById('question').textContent='';}
 }
@@ -396,6 +483,13 @@ async function post(url){try{const r=await fetch(url,{method:'POST'});
 document.querySelectorAll('.sc').forEach(b=>b.onclick=()=>post('/run?scenario='+b.dataset.s+'&tick_ms='+DEMO_TICK_MS));
 document.getElementById('demoBtn').onclick=()=>post('/demo');
 document.getElementById('demoExtBtn').onclick=()=>post('/demo?playlist=extended');
+document.getElementById('rBtn').onclick=()=>{
+  const v=document.getElementById('rq').value.trim();
+  if(v)post('/research?q='+encodeURIComponent(v));
+};
+document.getElementById('rq').onkeydown=(e)=>{
+  if(e.key==='Enter')document.getElementById('rBtn').onclick();
+};
 // replay control bar (pause/step/back/speed) — the Q&A "replay that" tool
 let curSpeed=1200;
 document.querySelectorAll('#rctl button').forEach(b=>b.onclick=()=>{
@@ -409,6 +503,8 @@ async function pollStatus(){
     const st=await (await fetch('/demo/status',{cache:'no-store'})).json();
     const busy=st.state&&st.state!=='idle';
     document.querySelectorAll('#controls button').forEach(b=>b.disabled=busy);
+    document.getElementById('rq').disabled=!!busy;
+    if(st.state!==window._lst){window._lst=st.state;if(st.state==='playing'){loadQuestion();loadRunDocs();}}
     const banner=document.getElementById('banner');
     if(st.state==='banner'||st.state==='preparing'){
       let head,sub;
@@ -424,7 +520,133 @@ async function pollStatus(){
     if(busy){const c=document.getElementById('conn');c.textContent=st.state+(st.scenario?(' · '+st.scenario):'')+(rc.paused?' · paused':'');c.className='';}
   }catch(e){}
 }
-legend();loadQuestion();poll();pollStatus();
+// ---------- evidence drawer (M15) ----------
+const drawer=document.getElementById('drawer');
+function shortHash(h){return (h==null?'—':String(h)).slice(0,12)}
+function openDrawer(i){
+  const ev=i.evidence||{};
+  document.getElementById('dsub').textContent=`tick ${i.ts} · ladder: ${i.ladder_action}`;
+  // ① verdict row: type · blame->node · red WITHHELD tag when the comparison is withheld
+  const withheld=i.type==='COMPARABILITY_BLOCK';
+  document.getElementById('dverdict').innerHTML=
+    `<span class="k">裁决 verdict</span><b>${i.type}</b> · blame → <b>${i.node}</b>`+
+    (withheld?'<span class="withheld">RESULT WITHHELD</span>':'');
+  // ② physical-evidence row: both data_hashes from the incident's own evidence
+  //    (baseline_tuple / deviator_tuple — no new fields, no manifest fetch)
+  const b=ev.baseline_tuple,dd=ev.deviator_tuple;
+  let hh=`<span class="k">物证 data_hash</span>`;
+  if(b&&dd){
+    const neq=b.data_hash!==dd.data_hash;
+    hh+=`<div class="hashrow${neq?' mismatch':''}"><span>baseline ${ev.baseline||''}</span><b>${shortHash(b.data_hash)}</b></div>`+
+        `<div class="hashrow${neq?' mismatch':''}"><span>deviator ${ev.deviator||i.node}</span><b>${shortHash(dd.data_hash)}</b></div>`+
+        (neq?`<div style="color:var(--killed);font-size:12px;margin-top:4px">`+
+             `哈希不等 → 不可比 · mismatch: ${(ev.mismatched_fields||[]).join(', ')||'data_hash'}</div>`:'');
+  }else{
+    hh+=`<div class="hashrow"><span>no four-tuple evidence on this incident</span></div>`;
+  }
+  document.getElementById('dhash').innerHTML=hh;
+  // ③ chain row: culprit + every currently-blocked node + the frozen baseline
+  const nodes=(lastState&&lastState.nodes)||[];
+  const seen=new Set(),parts=[];
+  const push=id=>{if(!id||seen.has(id))return;seen.add(id);
+    const n=nodes.find(x=>x.id===id);const st=n?n.status:'?';
+    parts.push(`${id} <b style="color:${C[st]||'#8b949e'}">${st}</b>`);};
+  push(i.node);
+  nodes.filter(n=>n.status==='blocked').forEach(n=>push(n.id));
+  push(ev.baseline);
+  document.getElementById('dchain').innerHTML=
+    `<span class="k">连锁 chain</span>`+(parts.join(' · ')||'—');
+  drawer.classList.add('show');drawer.setAttribute('aria-hidden','false');
+}
+function closeDrawer(){drawer.classList.remove('show');drawer.setAttribute('aria-hidden','true');}
+document.getElementById('dclose').onclick=closeDrawer;
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
+// deep-link #inc=<ts>: step the feed frame-by-frame until that incident is
+// visible, then open its drawer (deterministic; also used for the screenshot)
+async function deepLinkIncident(){
+  const m=(location.hash||'').match(/^#inc=(\d+)$/);if(!m)return;
+  const ts=+m[1];
+  for(let k=0;k<500;k++){
+    const inc=((lastState&&lastState.incidents)||[]).find(x=>x.ts===ts);
+    if(inc){openDrawer(inc);return;}
+    try{await fetch('/demo/ctl?op=step',{method:'POST'});}catch(e){}
+    await new Promise(r=>setTimeout(r,60));
+  }
+}
+deepLinkIncident();
+
+// ---------- run-info panels (Run / Nodes / Prompt tabs) ----------
+let PLAN=null,RUNINFO=null,PROMPTS=null,PTAB='run';
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+async function loadRunDocs(){
+  try{RUNINFO=await (await fetch('/runinfo.json',{cache:'no-store'})).json();}catch(e){RUNINFO=null;}
+  try{PROMPTS=await (await fetch('/prompts.json',{cache:'no-store'})).json();}catch(e){PROMPTS=null;}
+  renderPanels();
+}
+document.querySelectorAll('#ptabs button[data-t]').forEach(b=>b.onclick=()=>{
+  PTAB=b.dataset.t;
+  document.querySelectorAll('#ptabs button[data-t]').forEach(x=>x.classList.toggle('on',x===b));
+  for(const t of ['run','nodes','prompt'])document.getElementById('pc-'+t).style.display=(t===PTAB?'block':'none');
+  document.getElementById('panels').classList.remove('closed');
+  renderPanels();
+});
+document.getElementById('pclose').onclick=()=>document.getElementById('panels').classList.toggle('closed');
+// deep-link a tab: #tab=prompt (combinable with #inc=ts)
+const _tm=(location.hash||'').match(/tab=(run|nodes|prompt)/);
+if(_tm)document.querySelector(`#ptabs button[data-t="${_tm[1]}"]`).click();
+function renderPanels(){renderRun();renderNodes();renderPrompt();}
+function renderRun(){
+  const el=document.getElementById('pc-run');if(!el)return;
+  const act=((lastState&&lastState.nodes)||[]).filter(n=>n.status==='running');
+  let h='<div class="pgrid"><div class="pcol">';
+  h+=act.length
+    ?`<div style="margin-bottom:6px"><span class="pulse"></span><b>COMPUTING</b> — active: `+
+      act.map(n=>`${n.id}${n.kind==='long'&&n.step!=null?` (step ${n.step})`:''}`).join(', ')+`</div>`
+    :`<div style="margin-bottom:6px"><span class="idledot"></span>idle / quiesced — no node running</div>`;
+  if(RUNINFO){
+    const c=RUNINFO.compute;
+    h+=`<div><span class="pk">method</span>`+(c
+      ?(c.includes('real_train')?'<b>scripts/real_train.py</b> — real staged GBDT (long node)'
+        :`<b>${esc(c)}</b> — mock training curve`)
+      :'n/a')+`</div>`;
+    if(RUNINFO.bait)h+=`<div style="color:var(--killed)"><span class="pk">mode</span>BAIT CAST — adversarial decoy armed</div>`;
+    if(RUNINFO.planner)h+=`<div><span class="pk">planner</span>${esc(RUNINFO.planner.source)} · attempts ${RUNINFO.planner.attempts} · $${RUNINFO.planner.cost}</div>`;
+    if(RUNINFO.live_cost)h+=`<div><span class="pk">live model</span>${esc(RUNINFO.live_cost.model)} · $${RUNINFO.live_cost.cost_usd} · wall ${RUNINFO.live_cost.wall_s}s</div>`;
+    if(RUNINFO.run_dir)h+=`<div><span class="pk">run</span>${esc(RUNINFO.run_dir)}</div>`;
+  }
+  h+='</div><div class="pcol">';
+  const lu=RUNINFO&&RUNINFO.lineup;
+  if(lu&&Object.keys(lu).length){
+    h+='<table class="nt"><tr><th>node</th><th>role</th><th>behavior</th><th>actual</th></tr>'+
+      Object.entries(lu).map(([k,v])=>`<tr><td><b>${k}</b></td><td>${esc(v.role)}</td><td>${esc(v.behavior)}</td><td>${esc(v.actual)}</td></tr>`).join('')+'</table>';
+  }else{
+    h+='<div><span class="pk">lineup</span>mock / scripted run — every node is system-driven (no live agents)</div>';
+  }
+  h+='</div></div>';
+  el.innerHTML=h;
+}
+function renderNodes(){
+  const el=document.getElementById('pc-nodes');if(!el||!PLAN||!PLAN.nodes)return;
+  const st=(lastState&&lastState.nodes)||[];
+  el.innerHTML='<table class="nt"><tr><th>id</th><th>name</th><th>role</th><th>goal</th><th>scope</th><th>budget</th><th>now</th></tr>'+
+    PLAN.nodes.map(p=>{
+      const m=NODE_META[p.id]||{};const s=st.find(x=>x.id===p.id);
+      const chip=s?`<b style="color:${C[s.status]}">${STATUS_SHORT[s.status]||s.status}</b>`:'<span style="color:var(--dim)">–</span>';
+      return `<tr><td><b>${p.id}</b></td><td>${esc(m.name||'')}</td><td>${esc(p.role||'')}</td><td>${esc(m.goal||'')}</td><td>${esc(m.scope||'')}</td><td>${esc(m.budget||'')}</td><td>${chip}</td></tr>`;
+    }).join('')+'</table>';
+}
+function renderPrompt(){
+  const el=document.getElementById('pc-prompt');if(!el)return;
+  if(!PROMPTS){el.innerHTML='<span class="pk">loading…</span>';return;}
+  let h=`<div class="pblock"><div class="ph">research question (full text)</div><pre>${esc(PROMPTS.question)}</pre></div>`;
+  if(PROMPTS.bait)h+=`<div style="color:var(--killed);font-size:12px;margin:2px 0">⚠ this run was a BAIT CAST — the method node's brief carries an adversarial decoy (below, verbatim)</div>`;
+  for(const p of PROMPTS.prompts||[]){
+    h+=`<div class="pblock"><div class="ph">${p.node} · ${esc(p.role)} · ${esc(p.behavior)} · ${esc(p.source)}</div><pre>${esc(p.text)}</pre></div>`;
+  }
+  el.innerHTML=h;
+}
+
+legend();loadQuestion();loadRunDocs();poll();pollStatus();
 setInterval(()=>{poll();pollStatus();},800);
 </script>
 </body>

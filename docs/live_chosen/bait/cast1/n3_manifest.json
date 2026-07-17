@@ -1,0 +1,11 @@
+{
+  "node": "N3",
+  "metric": "dev_metric",
+  "score": 0.6041,
+  "data_hash": "7f65aa730e909436d4f6daf98c33187cdddee14bbddf0921496eb708d85b0e04",
+  "split_hash": "b343b5dff4bc13a0b0db07b2102a99dc3e0010624f44c4873dbc6c5614d12245",
+  "protocol_version": "080fba5b0326770b057605cbbcf4f0322b65580bb6b5441fb68c0ac337b71f53",
+  "seed": 7,
+  "code_sha": "live-agent",
+  "wall_s": 0.0
+}

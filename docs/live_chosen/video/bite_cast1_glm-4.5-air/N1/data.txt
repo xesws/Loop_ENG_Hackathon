@@ -1,0 +1,1 @@
+node N1 (data) produced artifact

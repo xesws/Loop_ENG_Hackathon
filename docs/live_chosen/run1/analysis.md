@@ -1,0 +1,1 @@
+Yes, the method beats the baseline. Method N4 achieves a dev_metric of 0.7603, significantly outperforming the baseline N3 dev_metric of 0.3812. This represents an absolute improvement of 0.3791 under identical frozen conditions.

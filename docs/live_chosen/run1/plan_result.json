@@ -1,0 +1,10 @@
+{
+  "source": "live",
+  "model": "z-ai/glm-5.2",
+  "cost": 0.004143,
+  "valid": true,
+  "question": "Does gradient boosting beat a linear baseline on our noisy 7-feature tabular regression task?",
+  "out": "/Users/tq/Downloads/Loop_ENG_hackathon_project/Loop_ENG_Hackathon/runs/20260717-140142-research/plan_live.json",
+  "attempts": 1,
+  "errors": []
+}
