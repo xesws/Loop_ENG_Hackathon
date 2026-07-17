@@ -26,6 +26,8 @@ class Scenario:
     scope_violation: dict | None = None         # {"node": id, "path": rel-to-run_dir}
     reopen: dict | None = None                  # {"node": id} — reopen once after green
     taint: dict | None = None                   # {"node": id, "kind": "protocol"}
+    compute_script: str | None = None           # live_research: N4 compute override (real_train)
+    live: dict = field(default_factory=dict)    # live_research: live lineup + budget config
 
     def override_for(self, node_id: str) -> dict:
         return dict(self.overrides.get(node_id, {}))
@@ -38,7 +40,9 @@ def load_scenario(path: str | Path) -> Scenario:
                     overrides=raw.get("overrides", {}) or {},
                     scope_violation=raw.get("scope_violation"),
                     reopen=raw.get("reopen"),
-                    taint=raw.get("taint"))
+                    taint=raw.get("taint"),
+                    compute_script=raw.get("compute_script"),
+                    live=raw.get("live") or {})
 
 
 def build_manifest(node: Node, repo_root: Path, score: float, scope_dir: Path,

@@ -1,0 +1,1 @@
+Yes, the fine-tuned method N4 clearly beats the few-shot baseline N3 under identical frozen conditions. The baseline N3 yields a dev_metric of 0.58. In contrast, method N4 achieves a dev_metric of 0.9975, demonstrating a massive performance improvement.

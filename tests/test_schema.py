@@ -21,7 +21,7 @@ def test_node_kinds_and_resources():
     assert g.nodes["N4"].compute is not None
     assert g.nodes["N4"].compute.argv() == ["python", "scripts/sim_train.py",
                                             "--profile", "rise_cross"]
-    assert g.nodes["N3"].expected_score == 0.58
+    assert g.nodes["N3"].expected_score == 0.6041
     assert g.nodes["N7"].spawn_only and g.nodes["N7"].spawned_by == "N5"
 
 

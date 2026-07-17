@@ -1,0 +1,3 @@
+train.jsonl row count: 6
+dev split indices: [4, 5]
+row schema: q: str, sql: str

@@ -1,0 +1,16 @@
+# LIVE-10: real data / real long node (real_train staged GBDT) / real live
+# workers / real gates. Mock scenarios and the default DEMO playlist are NOT
+# affected by this file. N0/N2 stay scripted (mock) by design — noted in the
+# report. Agent bounce/block by the gates is normal plot and lands in the
+# incident log as usual.
+name: live_research
+profile: rise_cross
+compute_script: scripts/real_train.py        # N4 long-node compute (11:52 gate: sim_train on two smoke failures)
+live:
+  fast_nodes: [N1, N3]      # LiveAgentWorker fast nodes (N0/N2 scripted)
+  n4_agent_manifest: true   # N4agent: live agent stamps N4 manifest, world-state fallback
+  n5_analysis: true         # one LLM call -> N5/analysis.md
+  n6_polish: true           # one LLM call -> report_polished.md
+  max_steps: 8              # per live agent node
+  max_laps: 2               # live lap budget intent (supervisor law ACCEPT_MAX_LAPS=3 stays frozen)
+  api_budget_usd: 3.0

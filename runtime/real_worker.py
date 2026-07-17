@@ -24,6 +24,21 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "openai/gpt-4o-mini"
 CMD_TIMEOUT = 25
 
+
+def load_dotenv() -> None:
+    """stdlib .env loader (repo root): KEY=VALUE lines, real env always wins."""
+    env = Path(__file__).resolve().parent.parent / ".env"
+    if not env.exists():
+        return
+    for line in env.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+load_dotenv()
+
 _ALLOW = {"ls", "cat", "head", "tail", "wc", "grep", "find", "sort", "uniq",
           "awk", "sed", "echo", "pwd", "python", "python3", "true", "nl", "cut"}
 _DENY = ("rm ", "rm-", "rmdir", "shutil", "os.remove", "os.unlink", "os.system",
@@ -75,9 +90,9 @@ class LiveAgentWorker:
         self.steps = 0
         self.transcript: list[dict] = []
 
-    def _chat(self, messages: list[dict]) -> str:
+    def _chat(self, messages: list[dict], max_tokens: int = 400) -> str:
         payload = {"model": self.model, "messages": messages,
-                   "temperature": 0.1, "max_tokens": 400}
+                   "temperature": 0.1, "max_tokens": max_tokens}
         req = urllib.request.Request(
             OPENROUTER_URL, data=json.dumps(payload).encode(),
             headers={"Authorization": f"Bearer {self.api_key}",
@@ -86,8 +101,9 @@ class LiveAgentWorker:
             data = json.load(r)
         if "error" in data:
             raise RuntimeError(str(data["error"])[:200])
-        self.cost += data.get("usage", {}).get("cost") or 0.0
-        return data["choices"][0]["message"]["content"]
+        usage = data.get("usage") or {}
+        self.cost += usage.get("cost") or 0.0
+        return data["choices"][0]["message"].get("content") or ""
 
     def _run(self, cmd: str, cwd: Path) -> str:
         try:
@@ -128,3 +144,13 @@ class LiveAgentWorker:
                 break
         return {"steps": self.steps, "cost": round(self.cost, 6),
                 "done": done_check(), "model": self.model, "transcript": self.transcript}
+
+
+def chat_once(system: str, user: str, model: str | None = None) -> tuple[str, float]:
+    """One stateless LLM call (N5 analysis / N6 report polish). Returns (text, cost)."""
+    w = LiveAgentWorker(max_steps=1, model=model)
+    text = w._chat([{"role": "system", "content": system},
+                    {"role": "user", "content": user}], max_tokens=1200)
+    if not text.strip():
+        raise RuntimeError("empty completion")
+    return text, w.cost

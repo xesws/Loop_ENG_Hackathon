@@ -1,0 +1,1 @@
+Yes. Method N4 (dev_metric=0.7603) outperforms baseline N3 (dev_metric=0.6041) by +0.1562 absolute under identical frozen data, split, protocol, and seed. The improvement (~25.9% relative) confirms the fine-tuned method beats the few-shot baseline.

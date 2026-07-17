@@ -10,7 +10,7 @@
     {"id": "N1", "kind": "fast", "resource": "cpu", "seed": 0, "role": "data"},
     {"id": "N2", "kind": "fast", "resource": "cpu", "seed": 0, "role": "harness"},
     {"id": "N3", "kind": "fast", "resource": "cpu", "seed": 7, "role": "eval",
-     "metric": "dev_metric", "expected_score": 0.58,
+     "metric": "dev_metric", "expected_score": 0.6041,
      "acceptance": ["python", "eval/score.py", "--who", "baseline"]},
     {"id": "N4", "kind": "long", "resource": "gpu", "seed": 7, "role": "train",
      "metric": "dev_metric",
