@@ -87,7 +87,7 @@ const EDGES = [
   ['N5','N4','back'],['N5','N7','artifact'] ];
 const SVG='http://www.w3.org/2000/svg';
 const svg=document.getElementById('graph');
-let lastIncCount=0, seenNodes=new Set();
+let lastIncCount=0, seenNodes=new Set(), flashCounters={}; // node -> polls of red flash left
 
 function el(t,a={}){const e=document.createElementNS(SVG,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
 function edgePath(a,b){const[x1,y1]=POS[a],[x2,y2]=POS[b];return `M${x1},${y1} L${x2},${y2}`;}
@@ -177,12 +177,14 @@ async function poll(){
     document.getElementById('conn').className='';
     document.getElementById('tick').textContent=s.ts;
     document.getElementById('rv').textContent='v'+s.report_version;
-    // detect new incidents -> flash their nodes red
-    const flash=new Set();
+    // detect new incidents -> flash their nodes red, and keep the flash alive for
+    // ~3 polls so a full-SVG re-render on the next poll doesn't cut it short.
     if((s.incidents||[]).length>lastIncCount){
-      for(const i of s.incidents.slice(lastIncCount))flash.add(i.node);
+      for(const i of s.incidents.slice(lastIncCount))flashCounters[i.node]=5;
     }
     lastIncCount=(s.incidents||[]).length;
+    const flash=new Set();
+    for(const k in flashCounters){if(flashCounters[k]>0){flash.add(k);flashCounters[k]--;}}
     render(s,flash);
     renderIncidents(s.incidents||[]);
   }catch(e){

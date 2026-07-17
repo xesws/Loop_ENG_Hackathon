@@ -72,6 +72,7 @@ class Orchestrator:
         self.armed: set[str] = set()
         self.finalized: set[str] = set()
         self.spawned: set[str] = set()
+        self._scope_checked: set[str] = set()
         self.report_version = 0
         self.topo_idx = {n: i for i, n in enumerate(graph.topo_order)}
 
@@ -101,6 +102,34 @@ class Orchestrator:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.long[nid] = _Long(proc=proc)
         self.gpu_node = nid
+
+    def _maybe_scope_violation(self, nid) -> bool:
+        """Scenario-injected out-of-scope write: the node reaches into another
+        node's scope dir. We detect it by containment (the write is not under the
+        node's own scope), revert it, and blame the node — all via the supervisor
+        API. Returns True if a violation was detected and handled."""
+        sv = self.scenario.scope_violation
+        if not sv or sv.get("node") != nid or nid in self._scope_checked:
+            return False
+        self._scope_checked.add(nid)
+        leak = (self.run_dir / sv["path"]).resolve()
+        leak.parent.mkdir(parents=True, exist_ok=True)
+        leak.write_text(f"# out-of-scope write by {nid} (mock injection)\n",
+                        encoding="utf-8")
+        scope = self._scope(nid).resolve()
+        if scope == leak or scope in leak.parents:
+            return False                          # actually inside its own scope
+        self.sup.raise_incident(
+            "SCOPE_VIOLATION", nid,
+            {"out_of_scope_path": sv["path"], "own_scope": nid,
+             "action": "revert", "detail": "diff landed outside declared scope"},
+            "blame_routing")
+        try:
+            leak.unlink()                         # revert the out-of-bounds write
+        except OSError:
+            pass
+        self.sup.transition(nid, Status.BLOCKED, "scope violation: reverted + blamed")
+        return True
 
     def _sense_long(self, nid, events) -> bool:
         node = self.g.nodes[nid]
@@ -373,6 +402,13 @@ class Orchestrator:
             # 1-2 sense + decide long nodes
             for nid in list(self.long):
                 node = self.g.nodes[nid]
+                if self._maybe_scope_violation(nid):     # intercept + revert + blame
+                    L = self.long.pop(nid)
+                    await self._terminate(L.proc)
+                    if self.gpu_node == nid:
+                        self.gpu_node = None
+                    freed.append(nid)
+                    continue
                 ckpt_boundary = self._sense_long(nid, events)
                 if node.status in TERMINAL:
                     continue

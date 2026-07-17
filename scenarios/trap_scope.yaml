@@ -1,0 +1,9 @@
+# Commons/scope trap: N4, whose scope is method/, reaches into the baseline node
+# N3's scope and writes a file there. The out-of-scope write is intercepted,
+# reverted, and blamed on N4 -> SCOPE_VIOLATION (evidence carries the path).
+name: trap_scope
+profile: rise_cross
+overrides: {}
+scope_violation:
+  node: N4
+  path: N3/leaked_by_N4.txt

@@ -51,9 +51,14 @@ Every milestone was committed on `main` (`git log --oneline`: M0…M5).
 - **Acceptance-gate bounce loop** (FALSE_COMPLETION → re-run) is implemented and
   unit-tested but no shipped scenario drives a fast-node acceptance failure; the
   demoed failures are comparability (trap_b), plateau, and hung.
-- **SCOPE_VIOLATION / stale-cascade / taint** are implemented and unit-tested in the
-  supervisor but not wired to a runtime scenario tonight (they are the venue traps
-  A and the STALE_CASCADE set piece for tomorrow).
+- **SCOPE_VIOLATION is now wired** via `--scenario trap_scope` (added after M6):
+  N4 reaches into the baseline node's scope and writes a file; the orchestrator
+  detects the out-of-scope write by containment, **reverts** it, and **blames N4**
+  (incident `SCOPE_VIOLATION` with the out-of-scope path in evidence, ladder
+  `blame_routing`) — all via the supervisor API, no `state.json` schema change. The
+  dashboard flashes N4 red and streams the incident.
+- **stale-cascade / taint** are implemented and unit-tested in the supervisor but
+  not yet wired to a runtime scenario (the STALE_CASCADE set piece is for tomorrow).
 - **Frozen `state.json` schema gap (recorded, not patched).** `state.json` is
   `{ts, nodes, incidents, report_version}` and carries **no research-question
   field** and **no `spawned`/edge info**. Per the iron rule (schema frozen after
@@ -130,6 +135,18 @@ run_dir: /Users/tangyiq/dev/OOAA/runs/20260716-234955-plateau
 #  "ladder_action":"fuse","node":"N4","ts":22,"type":"PLATEAU_TRIP"}
 # {"evidence":{"reason":"explain plateau","role":"ablation","spawned_from":"N4"},
 #  "ladder_action":"graph_surgery","node":"N7","ts":22,"type":"PLATEAU_TRIP"}
+
+########## $ python run.py --mock --scenario trap_scope   # (added after M6)
+=== scenario=trap_scope  ticks=8  quiesced=True ===
+  N0 verified · N1 verified · N2 verified · N3 verified
+  N4 blocked · N4e blocked · N5 blocked · N6 blocked
+incidents: 1
+# exit=0
+# incidents.jsonl:
+# {"evidence":{"action":"revert","detail":"diff landed outside declared scope",
+#   "out_of_scope_path":"N3/leaked_by_N4.txt","own_scope":"N4"},
+#  "ladder_action":"blame_routing","node":"N4","ts":7,"type":"SCOPE_VIOLATION"}
+# (leak file reverted; N3 stays verified)
 
 ########## $ python run.py --replay runs/20260716-234955-plateau/replay.jsonl
 === REPLAY runs/20260716-234955-plateau/replay.jsonl (25 ticks) — no workers, pure re-render ===
