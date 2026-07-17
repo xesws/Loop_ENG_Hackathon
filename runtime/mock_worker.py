@@ -24,6 +24,8 @@ class Scenario:
     profile: str = "rise_cross"                 # N4 trainer profile
     overrides: dict = field(default_factory=dict)   # {node_id: {manifest_field: value}}
     scope_violation: dict | None = None         # {"node": id, "path": rel-to-run_dir}
+    reopen: dict | None = None                  # {"node": id} — reopen once after green
+    taint: dict | None = None                   # {"node": id, "kind": "protocol"}
 
     def override_for(self, node_id: str) -> dict:
         return dict(self.overrides.get(node_id, {}))
@@ -34,7 +36,9 @@ def load_scenario(path: str | Path) -> Scenario:
     return Scenario(name=raw.get("name", Path(path).stem),
                     profile=raw.get("profile", "rise_cross"),
                     overrides=raw.get("overrides", {}) or {},
-                    scope_violation=raw.get("scope_violation"))
+                    scope_violation=raw.get("scope_violation"),
+                    reopen=raw.get("reopen"),
+                    taint=raw.get("taint"))
 
 
 def build_manifest(node: Node, repo_root: Path, score: float, scope_dir: Path,

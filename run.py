@@ -40,7 +40,8 @@ def parse_args():
                    help="host the dashboard (add --replay FILE to animate a recording)")
     p.add_argument("--port", type=int, default=8000, help="--serve port (default 8000)")
     p.add_argument("--scenario",
-                   choices=["green", "trap_b", "plateau", "hung", "trap_scope"])
+                   choices=["green", "trap_b", "plateau", "hung", "trap_scope",
+                            "trap_stale", "trap_taint"])
     return p.parse_args()
 
 
@@ -78,7 +79,8 @@ def _print_summary(r: RunResult) -> None:
 
 # ------------------------------------------------------------------ --serve
 _EMPTY = b'{"ts":0,"nodes":[],"incidents":[],"report_version":0}'
-_SCENARIOS = ("green", "trap_b", "trap_scope", "plateau", "hung")
+_SCENARIOS = ("green", "trap_b", "trap_scope", "plateau", "hung",
+              "trap_stale", "trap_taint")
 
 
 class _ReplayFeed:
@@ -115,14 +117,15 @@ class _ReplayFeed:
         return json.dumps(frame).encode()
 
 
-def _load_playlist() -> list[dict]:
+def _load_playlist(name: str = "default") -> list[dict]:
     default = [
         {"title": "PLATEAU — early-kill a hopeless run, keep the negative result",
          "scenario": "plateau", "tick_ms": 1200},
         {"title": "TRAP_SCOPE — intercept an out-of-scope write, blame the culprit",
          "scenario": "trap_scope", "tick_ms": 900},
     ]
-    p = REPO / "demo_playlist.yaml"
+    fname = "demo_playlist_extended.yaml" if name == "extended" else "demo_playlist.yaml"
+    p = REPO / fname
     if not p.exists():
         return default
     try:
@@ -245,8 +248,9 @@ def serve(port: int, replay_file: str | None) -> int:
                 if ctl.busy():
                     self._json({"error": "a run is already active"}, 409)
                 else:
-                    ctl.run_playlist(_load_playlist())
-                    self._json({"ok": True})
+                    pl = (q.get("playlist") or ["default"])[0]
+                    ctl.run_playlist(_load_playlist(pl))
+                    self._json({"ok": True, "playlist": pl})
             else:
                 self.send_error(404)
 

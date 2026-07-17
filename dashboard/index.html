@@ -15,7 +15,7 @@
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
        font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-  header{display:flex;align-items:baseline;gap:18px;padding:12px 18px;
+  header{display:flex;align-items:baseline;gap:14px;padding:12px 18px;flex-wrap:wrap;
          border-bottom:1px solid var(--line);background:var(--panel)}
   header h1{font-size:15px;margin:0;font-weight:600}
   header .q{color:var(--dim);font-size:13px;flex:1;min-width:0;
@@ -28,6 +28,8 @@
   #controls button:hover:not(:disabled){border-color:var(--running)}
   #controls button:disabled{opacity:.4;cursor:not-allowed}
   #demoBtn{background:var(--verified);color:#0d1117;font-weight:700;border-color:var(--verified);
+    font-size:14px;padding:7px 16px}
+  #demoExtBtn{background:var(--stale);color:#0d1117;font-weight:700;border-color:var(--stale);
     font-size:14px;padding:7px 16px}
   #banner{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
     background:rgba(13,17,23,.93);z-index:10}
@@ -80,7 +82,10 @@
     <button class="sc" data-s="trap_scope">trap_scope</button>
     <button class="sc" data-s="plateau">plateau</button>
     <button class="sc" data-s="hung">hung</button>
+    <button class="sc" data-s="trap_stale">trap_stale</button>
+    <button class="sc" data-s="trap_taint">trap_taint</button>
     <button id="demoBtn">▶ DEMO</button>
+    <button id="demoExtBtn">▶ DEMO+</button>
   </div>
   <div class="meta">tick <b id="tick">–</b> · report <b id="rv">–</b> · <span id="conn" class="disc">connecting…</span></div>
 </header>
@@ -229,6 +234,7 @@ async function post(url){
 }
 document.querySelectorAll('.sc').forEach(b=>b.onclick=()=>post('/run?scenario='+b.dataset.s+'&tick_ms='+DEMO_TICK_MS));
 document.getElementById('demoBtn').onclick=()=>post('/demo');
+document.getElementById('demoExtBtn').onclick=()=>post('/demo?playlist=extended');
 
 async function pollStatus(){
   try{

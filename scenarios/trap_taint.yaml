@@ -1,0 +1,11 @@
+# Contamination surface: after a clean green run, the eval protocol (frozen at N2)
+# is found broken. Taint propagates along artifact edges but SPARES training
+# (role==train): only the readings — N3 (baseline eval) and N4e (ckpt eval) — are
+# invalidated and re-evaluated (TAINT_INVALIDATION); N4's expensive training is
+# NOT thrown away. "Broken protocol voids readings, not training."
+name: trap_taint
+profile: rise_cross
+overrides: {}
+taint:
+  node: N2
+  kind: protocol

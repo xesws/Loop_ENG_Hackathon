@@ -73,6 +73,8 @@ class Orchestrator:
         self.finalized: set[str] = set()
         self.spawned: set[str] = set()
         self._scope_checked: set[str] = set()
+        self._reopened = False
+        self._tainted = False
         self.report_version = 0
         self.topo_idx = {n: i for i, n in enumerate(graph.topo_order)}
 
@@ -311,6 +313,103 @@ class Orchestrator:
                                 {"spawned_from": "N4", "role": "ablation",
                                  "reason": "explain plateau"}, "graph_surgery")
 
+    # ----------------------------------------------------- reopen / cascade
+    def _all_target_verified(self) -> bool:
+        for nid, n in self.g.nodes.items():
+            if n.spawn_only and not n.active:
+                continue
+            if n.status != Status.VERIFIED:
+                return False
+        return True
+
+    def _reset_node_for_rerun(self, nid):
+        """Clear the runtime bookkeeping that would stop a node re-running after a
+        stale-cascade (fingerprints, cached manifest, slot, detector, long files)."""
+        n = self.g.nodes[nid]
+        n.fp = None
+        n.fp8 = None
+        self.results.pop(nid, None)
+        self.fast_res.pop(nid, None)
+        self.cpu_running.pop(nid, None)
+        self._scope_checked.discard(nid)
+        if n.kind == Kind.LONG:
+            n.step = None
+            n.best_dev = None
+            self.long.pop(nid, None)
+            self.sup.det[nid] = self.sup.det[nid].__class__()   # fresh DetectorState
+            scope = self._scope(nid)
+            for f in (scope / n.compute.metrics_file,):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+            ckdir = scope / n.compute.ckpt_dir
+            if ckdir.exists():
+                for c in ckdir.glob("*"):
+                    try:
+                        c.unlink()
+                    except OSError:
+                        pass
+
+    def _maybe_reopen(self):
+        """trap_stale: once the graph is fully green, an upstream node (N1) reopens
+        (it 'discovered' a data bug). Its downstream artifact-closure demotes
+        verified->stale (STALE_CASCADE), stream consumers follow, and everything
+        auto re-runs back to green."""
+        rc = self.scenario.reopen
+        if not rc or self._reopened or not self._all_target_verified():
+            return
+        self._reopened = True
+        target = rc.get("node", "N1")
+        self.sup.transition(target, Status.PENDING, "reopened: upstream discovery")
+        self._reset_node_for_rerun(target)
+        for d in self.sup.on_reopen(target):          # artifact closure -> stale + incidents
+            self._reset_node_for_rerun(d)
+        self.finalized.discard("N5")
+        for r in ("N5", "N6"):                        # stream consumers of stale results
+            if self.g.nodes[r].status == Status.VERIFIED:
+                self.sup.raise_incident("STALE_CASCADE", r,
+                                        {"reopened_upstream": target,
+                                         "note": "downstream analysis/report"},
+                                        "downstream_invalidation")
+                self.sup.transition(r, Status.STALE, "upstream reopened")
+            self._reset_node_for_rerun(r)
+
+    def _maybe_taint(self):
+        """trap_taint: once green, the eval protocol is found broken. Taint
+        propagates along artifact edges but SPARES training (role==train): only the
+        readings (N3/N4e eval nodes) are invalidated and re-evaluated
+        (TAINT_INVALIDATION); N4's expensive training is preserved."""
+        tc = self.scenario.taint
+        if not tc or self._tainted or not self._all_target_verified():
+            return
+        self._tainted = True
+        target = tc.get("node", "N2")
+        kind = tc.get("kind", "protocol")
+        for d in self.sup.taint(target, kind):        # eval descendants -> stale; train spared
+            self._reset_node_for_rerun(d)
+            nd = self.g.nodes[d]
+            if nd.kind == Kind.REACTIVE and nd.triggers:   # re-wake to re-read the ckpt
+                t = nd.triggers[0]
+                nd.inbox.append(Trigger(t.src, t.event))
+        self.finalized.discard("N5")
+        for r in ("N5", "N6"):                        # consumers re-finalize on new readings
+            if self.g.nodes[r].status == Status.VERIFIED:
+                self.sup.transition(r, Status.STALE, "readings re-evaluated")
+            self._reset_node_for_rerun(r)
+
+    def _thaw_stale(self):
+        """A stale node whose artifact parents are re-verified becomes re-runnable:
+        fast/long -> pending (re-admit); reactive -> re-armed (re-finalize)."""
+        for nid, n in self.g.nodes.items():
+            if n.status != Status.STALE or not self._artifact_ready(nid):
+                continue
+            if n.kind == Kind.REACTIVE:
+                self.sup.transition(nid, Status.BLOCKED, "thawed: re-armed")
+                self.armed.add(nid)
+            else:
+                self.sup.transition(nid, Status.PENDING, "thawed: re-run")
+
     # ---------------------------------------------------------------- admit
     def _ready_fast_long(self):
         ready = []
@@ -444,6 +543,9 @@ class Orchestrator:
                 self._arm_reactive()
                 frontier = self._process_reactive()
             self._finalize_reactive()          # world-state terminal transitions
+            self._maybe_reopen()               # trap_stale: reopen -> stale cascade
+            self._maybe_taint()                # trap_taint: protocol taint, spare training
+            self._thaw_stale()                 # stale + parents re-verified -> re-run
 
             # 5 admit
             self._arm_reactive()

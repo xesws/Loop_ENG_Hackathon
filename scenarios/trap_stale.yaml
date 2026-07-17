@@ -1,0 +1,9 @@
+# The amber wave: a clean run reaches all-green, then N1 "discovers" duplicate
+# samples and reopens. Its downstream artifact-closure (N2, N3, N4, N4e) demotes
+# verified -> stale (STALE_CASCADE), the stream consumers N5/N6 follow, and the
+# whole graph auto re-runs back to green. The best ten seconds on the dashboard.
+name: trap_stale
+profile: rise_cross
+overrides: {}
+reopen:
+  node: N1

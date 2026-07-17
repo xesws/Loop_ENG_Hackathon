@@ -1,0 +1,15 @@
+# ▶ DEMO+ extended playlist (the default plateau→trap_scope list is untouched).
+# Adds the amber-wave set pieces. Played hands-free via POST /demo?playlist=extended.
+scenes:
+  - title: "PLATEAU — early-kill a hopeless run, keep the negative result, spawn an ablation"
+    scenario: plateau
+    tick_ms: 1100
+  - title: "TRAP_SCOPE — intercept an out-of-scope write, revert it, blame the culprit"
+    scenario: trap_scope
+    tick_ms: 900
+  - title: "TRAP_STALE — a data bug reopens N1: the amber wave cascades, then re-greens"
+    scenario: trap_stale
+    tick_ms: 700
+  - title: "TRAP_TAINT — broken protocol voids the readings but SPARES the training"
+    scenario: trap_taint
+    tick_ms: 800
