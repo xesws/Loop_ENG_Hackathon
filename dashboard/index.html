@@ -41,9 +41,10 @@
     font-size:14px;padding:7px 16px}
   #demoExtBtn{background:var(--stale);color:#0d1117;font-weight:700;border-color:var(--stale);
     font-size:14px;padding:7px 16px}
-  #controls input{font:13px ui-monospace,monospace;color:var(--ink);background:#0d1117;
+  #controls input,#controls select{font:13px ui-monospace,monospace;color:var(--ink);background:#0d1117;
     border:1px solid var(--line);border-radius:7px;padding:7px 10px}
-  #controls input:disabled{opacity:.4}
+  #controls input:disabled,#controls select:disabled{opacity:.4}
+  #liveModel{max-width:210px}
   #rBtn{background:var(--running);color:#0d1117;font-weight:700;border-color:var(--running)}
   #connbar{display:none;background:var(--killed);color:#fff;text-align:center;
     font-weight:700;padding:5px;font-size:13px}
@@ -203,11 +204,17 @@
     <button class="sc" data-s="trap_taint">trap_taint</button>
     <button id="demoBtn">▶ DEMO</button>
     <button id="demoExtBtn">▶ DEMO+</button>
+    <select id="liveModel" title="LIVE_MODEL for planner + live agents">
+      <option value="z-ai/glm-5.2">GLM 5.2</option>
+      <option value="z-ai/glm-4.5-air">GLM 4.5 Air</option>
+      <option value="openai/gpt-4o-mini">GPT-4o mini</option>
+      <option value="openai/gpt-4o">GPT-4o</option>
+    </select>
     <input id="rq" type="text" placeholder="type a research question…" size="26"
            title="one sentence in — planner + full-live run (M12)">
     <button id="rBtn" title="plan + run it live">Run</button>
   </div>
-  <div class="meta">tick <b id="tick">–</b> · report <b id="rv">–</b> · <span id="conn" class="disc">connecting…</span></div>
+  <div class="meta">tick <b id="tick">–</b> · report <b id="rv">–</b> · model <b id="modelLbl">–</b> · <span id="conn" class="disc">connecting…</span></div>
 </header>
 <div id="connbar">⚠ lost connection to the run server — is <code>python run.py --serve</code> still running?</div>
 <div id="banner"><div id="bannerText"></div></div>
@@ -483,9 +490,20 @@ async function post(url){try{const r=await fetch(url,{method:'POST'});
 document.querySelectorAll('.sc').forEach(b=>b.onclick=()=>post('/run?scenario='+b.dataset.s+'&tick_ms='+DEMO_TICK_MS));
 document.getElementById('demoBtn').onclick=()=>post('/demo');
 document.getElementById('demoExtBtn').onclick=()=>post('/demo?playlist=extended');
+function selectedModel(){
+  return document.getElementById('liveModel').value || 'z-ai/glm-5.2';
+}
+document.getElementById('liveModel').onchange=()=>{
+  const m=selectedModel();
+  document.getElementById('modelLbl').textContent=m;
+  post('/model?id='+encodeURIComponent(m));
+};
 document.getElementById('rBtn').onclick=()=>{
   const v=document.getElementById('rq').value.trim();
-  if(v)post('/research?q='+encodeURIComponent(v));
+  if(!v) return;
+  const m=selectedModel();
+  document.getElementById('modelLbl').textContent=m;
+  post('/research?q='+encodeURIComponent(v)+'&model='+encodeURIComponent(m));
 };
 document.getElementById('rq').onkeydown=(e)=>{
   if(e.key==='Enter')document.getElementById('rBtn').onclick();
@@ -504,6 +522,12 @@ async function pollStatus(){
     const busy=st.state&&st.state!=='idle';
     document.querySelectorAll('#controls button').forEach(b=>b.disabled=busy);
     document.getElementById('rq').disabled=!!busy;
+    document.getElementById('liveModel').disabled=!!busy;
+    if(st.live_model){
+      const sel=document.getElementById('liveModel');
+      if([...sel.options].some(o=>o.value===st.live_model)) sel.value=st.live_model;
+      document.getElementById('modelLbl').textContent=st.live_model;
+    }
     if(st.state!==window._lst){window._lst=st.state;if(st.state==='playing'){loadQuestion();loadRunDocs();}}
     const banner=document.getElementById('banner');
     if(st.state==='banner'||st.state==='preparing'){

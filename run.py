@@ -12,6 +12,7 @@ import asyncio
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -194,6 +195,7 @@ class DemoController:
         self.feed: _ReplayFeed | None = None
         self.plan_path = REPO / "graph" / "plan_cached.json"
         self.run_dir: Path | None = None
+        self.live_model = os.environ.get("LIVE_MODEL") or "z-ai/glm-5.2"
         self.status = {"state": "idle", "scenario": None, "banner": None,
                        "playlist": [], "idx": 0, "tick_ms": 1200}
 
@@ -203,11 +205,20 @@ class DemoController:
     def frame_bytes(self) -> bytes:
         return self.feed.frame_bytes() if self.feed else _EMPTY
 
+    def set_live_model(self, model: str) -> str | None:
+        """Validate + store OpenRouter model id for the next --research hop."""
+        m = (model or "").strip()
+        if not m or len(m) > 80 or not re.fullmatch(r"[A-Za-z0-9_./:[\]-]+", m):
+            return "bad model id"
+        self.live_model = m
+        return None
+
     def status_snapshot(self) -> dict:
         s = dict(self.status)
         f = self.feed
         s["replay"] = {"paused": bool(f and f.paused), "idx": (f.idx if f else 0),
                        "len": (len(f.lines) if f else 0)}
+        s["live_model"] = self.live_model
         return s
 
     def ctl(self, op: str, ms: int = 1000):
@@ -266,14 +277,23 @@ class DemoController:
             self.status.update(state="idle", banner=None)
         threading.Thread(target=worker, daemon=True).start()
 
-    def _play_research(self, question: str, tick_ms: int = 500):
+    def _play_research(self, question: str, tick_ms: int = 500,
+                       model: str | None = None):
         """M12: full-live run of a typed-in question, then animate its replay.
-        The dashboard never blocks on the ~2min run; status shows 'preparing'."""
+        The dashboard never blocks on the ~2min run; status shows 'preparing'.
+        `model` (if set) becomes LIVE_MODEL for planner + live agents."""
+        if model:
+            err = self.set_live_model(model)
+            if err:
+                self.status.update(state="idle")
+                return
         self.status.update(state="preparing", scenario="research", banner=None,
                            tick_ms=tick_ms)
+        env = os.environ.copy()
+        env["LIVE_MODEL"] = self.live_model
         try:
             subprocess.run([sys.executable, str(REPO / "run.py"), "--research",
-                            question], cwd=str(REPO),
+                            question], cwd=str(REPO), env=env,
                            capture_output=True, text=True, timeout=600)
         except Exception:
             self.status.update(state="idle")
@@ -293,9 +313,9 @@ class DemoController:
             time.sleep(0.1)
         time.sleep(2.5)                          # hold the final frame
 
-    def run_research(self, question: str):
+    def run_research(self, question: str, model: str | None = None):
         def worker():
-            self._play_research(question)
+            self._play_research(question, model=model)
             self.status.update(state="idle", banner=None)
         threading.Thread(target=worker, daemon=True).start()
 
@@ -491,13 +511,24 @@ def serve(port: int, replay_file: str | None) -> int:
                     self._json({"ok": True, "scenario": scenario})
             elif u.path == "/research":
                 question = (q.get("q") or [""])[0].strip()
+                model = (q.get("model") or [""])[0].strip() or None
                 if not question:
                     self._json({"error": "missing q"}, 400)
                 elif ctl.busy():
                     self._json({"error": "a run is already active"}, 409)
+                elif model and ctl.set_live_model(model):
+                    self._json({"error": "bad model id"}, 400)
                 else:
-                    ctl.run_research(question)
-                    self._json({"ok": True, "scenario": "research"})
+                    ctl.run_research(question, model=model)
+                    self._json({"ok": True, "scenario": "research",
+                                "model": ctl.live_model})
+            elif u.path == "/model":
+                model = (q.get("id") or [""])[0].strip()
+                err = ctl.set_live_model(model)
+                if err:
+                    self._json({"error": err}, 400)
+                else:
+                    self._json({"ok": True, "model": ctl.live_model})
             elif u.path == "/demo":
                 if ctl.busy():
                     self._json({"error": "a run is already active"}, 409)
