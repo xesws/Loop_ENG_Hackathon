@@ -6,8 +6,8 @@ ckpt/ckpt_<pct>.txt every 10% of steps. dev_metric is a pure function of the
 step fraction; sleep only paces output, it never affects a value.
 
 Profiles:
-  rise_cross    crosses the 0.58 baseline near ~70%, saturates ~0.62  (green: positive)
-  rise_plateau  saturates ~0.53 by ~40% (< 0.58)                      (plateau: negative)
+  rise_cross    crosses the 0.6041 baseline near ~70%, saturates ~0.62  (green: positive)
+  rise_plateau  saturates ~0.53 by ~40% (< 0.6041)                      (plateau: negative)
   hang          rises to HANG_AT then stops advancing `step`          (hung: HUNG_RESTART)
 """
 import argparse
@@ -25,11 +25,11 @@ HANG_HOLD_S = 20.0      # bounded safety hold; orchestrator kills far sooner
 
 def dev(profile: str, pct: float) -> float:
     if profile in ("rise_cross", "hang"):
-        # steady climb: crosses 0.58 at ~67%, ends 0.72; per-ckpt gain 0.042 > eps
+        # steady climb: crosses 0.6041 at ~67%, ends 0.72; per-ckpt gain 0.042 > eps
         # so a rising run never trips PLATEAU (only a below-target saturation does).
         return 0.30 + 0.42 * pct
     if profile == "rise_plateau":
-        # ~0.505/0.526/0.530/0.531 at 10/20/30/40%, asymptote 0.531 (< 0.58)
+        # ~0.505/0.526/0.530/0.531 at 10/20/30/40%, asymptote 0.531 (< 0.6041)
         return 0.40 + 0.131 * (1.0 - math.exp(-16.0 * pct))
     raise SystemExit(f"unknown profile {profile}")
 

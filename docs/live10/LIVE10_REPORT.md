@@ -122,3 +122,86 @@ report_polished.md（run2，单测路径）、n4_ckpt_100.pkl（真模型 checkp
 - a. 第 1 跑 exit 0 / 墙钟 ≤6min / report.md 真实数字：TBD
 - b. 第 2 跑结论路径稳定：TBD
 - c. pytest -q + 3 mock 场景抽查 + ▶DEMO 未碰（git diff 佐证）：TBD
+
+---
+
+# v1.1 — 数据地基修复（M10.1，分支 m10-1）
+
+**为什么换数据（一句）**：v1.0 跑在 6 行玩具数据上，best_dev=0.998 是背题
+（dev 2 行、标签可被单一关键词规则完美分离），上台会被笑；v1.1 换成 400 行、
+7 特征、带噪声的非线性回归集，让分数落在统计意义上可信的区间。
+
+## 新地基（scripts/make_dataset.py，stdlib random，seed=20260717）
+
+- `data/dataset.csv`：400 行 × (x1..x7, y)；
+  `y = 2.0·x1 + 1.2·x2 + 1.2·sin(6·x3) + 0.9·x4² + 0.6·x5·x6 + N(0, 0.65)`
+- `data/split.json`：train/dev = 320/80（同一 seed shuffle，字节级可复现）
+- 结构设计：线性项喂 baseline；sin/平方喂方法增量；**x5·x6 交互（深度 1
+  stump 学不到）+ 噪声把方法上限压在 ~0.85** —— 离 0.97 过拟合红线远
+- 标定记录（生成器原文）：
+  `BASELINE linear OLS dev R2 = 0.6041`（带 [0.55,0.70] ✓）
+  real_train（60 stages, lr=0.5）dev R² = 0.7603（带 [0.75,0.90] ✓，<0.92 ✓）
+
+## 新旧分数对照
+
+| | v1.0（live10） | v1.1（m10-1） |
+|---|---|---|
+| 数据 | 6 行 text-to-SQL | 400 行带噪声回归 |
+| 指标 | execution accuracy | dev R² |
+| baseline（N3） | 0.58（告知值） | 0.6041（OLS 实算，live agent 自己跑最小二乘） |
+| method（N4） | 0.9975（背题） | ~0.76（GBDT 真实训练上限） |
+| 过拟合红线 | — | ≥0.97 判失败（本任务存在理由） |
+
+## 重标定三处（+fixture）
+
+- `graph/plan_cached.json`：N3.expected_score 0.58 → 0.6041
+- `eval/protocol.md`：metric=R²、baseline=0.6041、data=dataset.csv
+  （protocol_version 哈希随内容换雪，全链路运行时重算，四元组仍一致）
+- `scripts/real_train.py`：回归化重写（MSE stump-GBDT），60 stages×1.8s
+  节流维持 compute_phase ≈108s，lr 0.3→0.5 使 60 stage 内收敛进带
+- fixture：`tests/test_schema.py:24` 断言值 0.58→0.6041（只改 fixture 不改逻辑）
+- 监督逻辑/阈值语义零改动（core/ diff 为空）；dashboard 未碰（其 0.58 文案
+  成为装饰性陈旧，如实注明）
+
+## 两跑验收（输出原文）
+
+**第 1 跑**（runs/20260717-124401-live_research）：
+```
+=== scenario=live_research  ticks=66  quiesced=True ===   (8/8 verified, incidents 0)
+RESEARCH ANSWERED: fine-tuned model beats baseline (best_dev=0.760 >= 0.6041)
+wall_s=153.4  live_cost=$0.0127 (budget $3.0)    EXIT=0
+```
+如实注明：第 1 跑 N3 agent 八步内逐行写 OLS 脚本、步数耗尽 → mock 回退
+（混合阵容合法）。根因定位后任务文本加"步数预算"指引（整脚本一条命令），
+单节点复测：agent 2 步算出 R²=0.60406…（与生成器官方值 0.6041 一致）PASS。
+
+**第 2 跑**（runs/20260717-125000-live_research，全 live 无回退）：
+```
+=== scenario=live_research  ticks=128  quiesced=True ===  (8/8 verified, incidents 0)
+RESEARCH ANSWERED: fine-tuned model beats baseline (best_dev=0.760 >= 0.6041)
+wall_s=123.5  live_cost=$0.0032 (budget $3.0)    EXIT=0
+```
+N3 manifest：score=0.6041, code_sha=live-agent（agent 自算 OLS）；
+N4 manifest：score=0.7603, code_sha=live-agent；四元组完全一致过可比性门。
+
+**验收五条核对**：exit 0 ×2 ✓ · 墙钟 153.4s/123.5s ≤6min ✓ ·
+best_dev=0.760 ∈ [0.65,0.92] ✓ · 严格高于 baseline（0.760 > 0.6041）✓ ·
+无 ≥0.97 ✓（方法上限被交互项+噪声结构压在 ~0.85 以下）
+
+## 回归护栏（输出原文）
+
+```
+pytest -q  ->  45 passed, 1 warning in 0.32s
+green exit 0 / trap_b exit 0 / plateau exit 0 / hung exit 0 /
+trap_scope exit 0 / trap_stale exit 0 / trap_taint exit 0   (7/7)
+mock green verdict:  RESEARCH ANSWERED (best_dev=0.720 >= 0.6041)
+mock plateau verdict: NEGATIVE RESULT (best_dev=0.531 < 0.6041)
+git diff -- dashboard/ demo_playlist*.yaml core/  ->  空
+```
+
+## v1.1 归档
+
+`docs/live10/v1.1/`：calibration.txt（生成器标定原文）+ run1/、run2/
+各 11 件（replay、state、report、live_cost、n4_metrics（真 R² 曲线
+0.556→0.760）、n3/n4 manifest、n1 notes、n5 analysis、report_polished、
+n4_ckpt_100.pkl）。花费合计 ≈$0.017 / $3.00。merge 留人决定。

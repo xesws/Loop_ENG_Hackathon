@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""Real staged GBDT trainer (stdlib only) — the live_research long node.
+"""Real staged GBDT trainer (stdlib only) — live_research long node, v1.1.
 
-Trains a gradient-boosted decision-stump ensemble on features extracted from the
-repo's real data subset (data/train.jsonl; dev rows from data/split.json). Each
-stage appends {"step","dev_metric"} to metrics.jsonl; every 10% it writes
+Regression on the v1.1 benchmark (data/dataset.csv, 400 rows x 7 features;
+dev rows from data/split.json): gradient boosting of depth-1 decision stumps
+on squared loss. dev_metric = R2 on the dev split — a real function of the
+model, rising fast then saturating near the noise/interaction ceiling (~0.85).
+
+Each stage appends {"step","dev_metric"} to metrics.jsonl; every 10% writes
 ckpt/ckpt_<pct>.txt (step=/dev= lines, consumed by N4e and eval/score.py) plus
 ckpt/ckpt_<pct>.pkl (the pickled ensemble — a real checkpoint).
 
-dev_metric = mean sigmoid(2 * margin) on the dev rows: a real function of the
-model, monotone rising, saturating late (~0.99). Wall-clock is paced by --sleep
-so compute_phase ~= 100-120s (same discipline as sim_train: values are real,
-the clock is paced). --profile is accepted for drop-in compatibility with the
-orchestrator's long-node launcher; the curve comes from the model, not the name.
+Wall-clock is paced by --sleep so compute_phase ~= 100-120s (same discipline
+as sim_train: values are real, the clock is paced). --profile is accepted for
+drop-in compatibility with the orchestrator's long-node launcher; the curve
+comes from the model, not the name.
 """
 import argparse
+import csv
 import json
-import math
 import pickle
 import time
 from pathlib import Path
@@ -23,11 +25,30 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def featurize(row):
-    q, s = row["q"].lower(), row["sql"].lower()
-    return [len(q) / 80.0, q.count(" ") / 12.0,
-            float("count" in q or "how many" in q), float("most" in q),
-            len(s) / 120.0]
+def load():
+    rows = list(csv.DictReader((ROOT / "data" / "dataset.csv").open()))
+    X = [[float(r[f"x{j}"]) for j in range(1, 8)] for r in rows]
+    y = [float(r["y"]) for r in rows]
+    split = json.loads((ROOT / "data" / "split.json").read_text())
+    return X, y, split["train"], split["dev"]
+
+
+def fit_stump(X, res, tr):
+    """Depth-1 regression stump minimizing SSE on the train residuals."""
+    best = None
+    for j in range(len(X[0])):
+        vals = sorted(X[i][j] for i in tr)
+        for q in range(1, 10):
+            thr = vals[len(vals) * q // 10]
+            lo = [res[i] for i in tr if X[i][j] < thr]
+            hi = [res[i] for i in tr if X[i][j] >= thr]
+            if not lo or not hi:
+                continue
+            ml, mh = sum(lo) / len(lo), sum(hi) / len(hi)
+            sse = sum((r - ml) ** 2 for r in lo) + sum((r - mh) ** 2 for r in hi)
+            if best is None or sse < best[0]:
+                best = (sse, j, thr, ml, mh)
+    return best[1:]
 
 
 def main():
@@ -35,34 +56,23 @@ def main():
     ap.add_argument("--profile", default="live")   # compat; curve comes from the model
     ap.add_argument("--stages", type=int, default=60)
     ap.add_argument("--sleep", type=float, default=1.8)   # 60*1.8 ~= 108s compute_phase
-    ap.add_argument("--lr", type=float, default=0.05)
+    ap.add_argument("--lr", type=float, default=0.5)
     a = ap.parse_args()
-    rows = [json.loads(l) for l in
-            (ROOT / "data" / "train.jsonl").read_text().splitlines() if l.strip()]
-    split = json.loads((ROOT / "data" / "split.json").read_text())
-    X = [featurize(r) for r in rows]
-    y = [float(r["sql"].lower().startswith("select count")) for r in rows]
-    tr, dev = split["train"], split["dev"]
-    F = [0.0] * len(rows)
+    X, y, tr, dev = load()
+    F = [sum(y[i] for i in tr) / len(tr)] * len(X)
     stumps = []
+    mean_dev = sum(y[i] for i in dev) / len(dev)
+    ss_tot = sum((y[i] - mean_dev) ** 2 for i in dev)
     Path("ckpt").mkdir(exist_ok=True)
     with open("metrics.jsonl", "a", encoding="utf-8") as f:
         for step in range(1, a.stages + 1):
-            grad = [y[i] - 1.0 / (1.0 + math.exp(-2.0 * F[i])) for i in tr]
-            best = None
-            for j in range(len(X[0])):
-                for thr in sorted({X[i][j] for i in tr}):
-                    for sign in (1.0, -1.0):
-                        gain = abs(sum(g * (sign if X[i][j] >= thr else -sign)
-                                       for g, i in zip(grad, tr)))
-                        if best is None or gain > best[0]:
-                            best = (gain, j, thr, sign)
-            _, j, thr, sign = best
-            stumps.append((j, thr, sign))
-            for i in range(len(rows)):
-                F[i] += a.lr * (sign if X[i][j] >= thr else -sign)
-            d = round(sum(1.0 / (1.0 + math.exp(-2.0 * F[i] * (2 * y[i] - 1)))
-                          for i in dev) / len(dev), 4)
+            res = [y[i] - F[i] for i in range(len(X))]
+            j, thr, ml, mh = fit_stump(X, res, tr)
+            stumps.append((j, thr, ml, mh))
+            for i in range(len(X)):
+                F[i] += a.lr * (ml if X[i][j] < thr else mh)
+            ss_res = sum((y[i] - F[i]) ** 2 for i in dev)
+            d = round(max(0.0, 1.0 - ss_res / ss_tot), 4)
             f.write(json.dumps({"step": step, "dev_metric": d}) + "\n")
             f.flush()
             if step % max(1, a.stages // 10) == 0:

@@ -67,7 +67,7 @@ async def run_mock(scenario_name: str, plan_file: str | None = None) -> RunResul
     run_dir = REPO / "runs" / ts
     clock = TickClock()
     log = IncidentLog(run_dir, keep_last=20)
-    sup = Supervisor(g, log, now=clock.now, baseline_id="N3", target=0.58)
+    sup = Supervisor(g, log, now=clock.now, baseline_id="N3", target=0.6041)
     worker = MockWorker(scenario, REPO, TICK_S)
     orch = Orchestrator(g, sup, worker, scenario, clock, run_dir, REPO, tick_s=TICK_S)
     result = await orch.run()
@@ -366,15 +366,19 @@ def _live_task(node_id: str) -> str:
     return (
         f"You are node {node_id} of an auto-research pipeline, working in your "
         f"sandbox directory (your cwd). The repo root is {REPO}.\n"
-        f"Read-only inputs: {REPO}/data/train.jsonl (6 text-to-SQL rows) and "
-        f"{REPO}/data/split.json (dev split = rows [4,5]).\n"
-        "Goal: establish a BASELINE dev_metric (execution accuracy) for a few-shot "
-        "large-model baseline on the dev split, then emit results.json in your cwd.\n"
+        f"Read-only inputs: {REPO}/data/dataset.csv (400 rows, features x1..x7, "
+        f"target y) and {REPO}/data/split.json (train/dev row indices).\n"
+        "Goal: establish a BASELINE dev_metric (R^2 on the dev split) for a "
+        "LINEAR least-squares model on x1..x7, then emit results.json in your cwd.\n"
+        "Write a SMALL python script that fits OLS (normal equations) on the "
+        "train rows and prints R^2 on the dev rows. BUDGET YOUR STEPS: emit the "
+        "whole computation as ONE command (a single python3 -c \"...\" or one "
+        "printf block writing the file at once) — never write a file line by "
+        "line. A correct answer lands roughly in [0.55, 0.70].\n"
         "Emit the manifest (with the correct frozen hashes) by running:\n"
         f"  python {REPO}/eval/make_manifest.py --node {node_id} --score <SCORE> --out results.json\n"
-        "A reasonable few-shot baseline on this subset scores about 0.58. Inspect the "
-        "data, choose a score in [0,1], run make_manifest, then reply DONE.\n"
-        "Use ABSOLUTE paths for repo files. Allowed commands: ls, cat, head, python, echo."
+        "Use ABSOLUTE paths for repo files. Allowed commands: ls, cat, head, python, echo.\n"
+        "When results.json is written and valid, reply DONE."
     )
 
 
@@ -417,10 +421,10 @@ def _n1_task() -> str:
     return (
         "You are node N1 (data) of an auto-research pipeline, working in your "
         f"sandbox directory (your cwd). The repo root is {REPO}.\n"
-        f"Read-only inputs: {REPO}/data/train.jsonl (6 text-to-SQL rows) and "
-        f"{REPO}/data/split.json.\n"
+        f"Read-only inputs: {REPO}/data/dataset.csv (400 rows, features x1..x7, "
+        f"target y) and {REPO}/data/split.json (train/dev row indices).\n"
         "Goal: inspect the data and write data_notes.txt in your cwd with: the "
-        "row count, the dev split indices, and a one-line schema of a row.\n"
+        "row count, the feature column names, and the train/dev sizes.\n"
         "Use ABSOLUTE paths for repo files. Allowed commands: ls, cat, head, "
         "python, echo. When data_notes.txt is written, reply DONE."
     )
@@ -558,7 +562,7 @@ async def run_live_research() -> RunResult:
     run_dir = REPO / "runs" / ts
     clock = TickClock()
     log = IncidentLog(run_dir, keep_last=20)
-    sup = Supervisor(g, log, now=clock.now, baseline_id="N3", target=0.58)
+    sup = Supervisor(g, log, now=clock.now, baseline_id="N3", target=0.6041)
     tracker = {"cost": 0.0}
     worker = _HybridWorker(MockWorker(scenario, REPO, tick_s),
                            live_cfg.get("fast_nodes", ["N1", "N3"]),
@@ -595,7 +599,7 @@ async def run_live_full(live_nodes=("N3",)) -> RunResult:
     run_dir = REPO / "runs" / ts
     clock = TickClock()
     log = IncidentLog(run_dir, keep_last=20)
-    sup = Supervisor(g, log, now=clock.now, baseline_id="N3", target=0.58)
+    sup = Supervisor(g, log, now=clock.now, baseline_id="N3", target=0.6041)
     worker = _HybridWorker(MockWorker(scenario, REPO, TICK_S), live_nodes)
     print(f"LIVE full run: real agent on {sorted(live_nodes)}, mock elsewhere "
           f"(N4 compute=sim_train). run_dir={run_dir}")
