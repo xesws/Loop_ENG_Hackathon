@@ -1,8 +1,9 @@
 """Live planner — one LLM call turns a research question into a validated graph.
 
-Uses OpenRouter (OpenAI-compatible) over stdlib urllib (no new deps). Model comes
-from env LIVE_MODEL (default a cheap model); the API key comes from env
-OPENROUTER_API_KEY and is never hardcoded or printed. On ANY failure — no key,
+Uses an OpenAI-compatible endpoint over stdlib urllib (no new deps). Provider comes
+from env LIVE_PROVIDER (openrouter|akash, default openrouter); model from LIVE_MODEL
+(default a cheap model); the API key from that provider's env var, never hardcoded or
+printed (see runtime/providers.py). On ANY failure — no key,
 network error, unparseable output, or schema/normalizer rejection — it falls back
 to the cached plan so the caller always ends up with a valid graph.
 """
@@ -14,9 +15,7 @@ import urllib.request
 from pathlib import Path
 
 from graph import normalizer, schema
-
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "openai/gpt-4o-mini"
+from runtime import providers
 
 _SYSTEM = (
     "You are a research-graph planner for an async, graph-native auto-research "
@@ -51,7 +50,7 @@ def _extract_json(text: str) -> str:
 
 
 def _call_llm(question: str, template_json: str, model: str, api_key: str,
-              timeout: int = 60) -> tuple[str, float | None]:
+              url: str, timeout: int = 60) -> tuple[str, float | None]:
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": _SYSTEM},
@@ -60,7 +59,7 @@ def _call_llm(question: str, template_json: str, model: str, api_key: str,
         "max_tokens": 1600,
     }
     req = urllib.request.Request(
-        OPENROUTER_URL, data=json.dumps(payload).encode(),
+        url, data=json.dumps(payload).encode(),
         headers={"Authorization": f"Bearer {api_key}",
                  "Content-Type": "application/json",
                  "X-Title": "OOAA-planner"})
@@ -80,14 +79,15 @@ def generate_plan(question: str, run_dir: Path, cached_path: Path) -> dict:
     run_dir.mkdir(parents=True, exist_ok=True)
     out = run_dir / "plan_live.json"
     cached = Path(cached_path).read_text(encoding="utf-8")
-    model = os.environ.get("LIVE_MODEL") or DEFAULT_MODEL
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    prov = providers.resolve()
+    model = os.environ.get("LIVE_MODEL") or prov.default_model
+    api_key = prov.api_key
     result = {"source": "live", "model": model, "cost": None, "valid": False,
               "question": question, "out": str(out)}
     try:
         if not api_key:
-            raise RuntimeError("OPENROUTER_API_KEY unset")
-        content, cost = _call_llm(question, cached, model, api_key)
+            raise RuntimeError(f"{prov.key_env} unset")
+        content, cost = _call_llm(question, cached, model, api_key, prov.url)
         result["cost"] = cost
         obj = json.loads(_extract_json(content))
         out.write_text(json.dumps(obj, indent=2), encoding="utf-8")

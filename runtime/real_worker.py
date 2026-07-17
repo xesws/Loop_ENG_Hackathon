@@ -9,7 +9,8 @@ from the mock worker. That is the product claim: "drop-in, don't touch your agen
 Safety (this runs unattended on a real machine): allowlisted command names +
 content denylist (no rm/network/sudo/parent-escape/home/system paths) + per-command
 timeout + cwd pinned to the node dir + max_steps<=15. Model from LIVE_MODEL (cheap
-default); key from OPENROUTER_API_KEY (never hardcoded/printed).
+default); provider from LIVE_PROVIDER (openrouter|akash, default openrouter); key
+from that provider's env var (never hardcoded/printed). See runtime/providers.py.
 """
 from __future__ import annotations
 
@@ -20,8 +21,8 @@ import subprocess
 import urllib.request
 from pathlib import Path
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "openai/gpt-4o-mini"
+from runtime import providers
+
 CMD_TIMEOUT = 25
 
 
@@ -82,10 +83,12 @@ def _safe(cmd: str) -> tuple[bool, str]:
 class LiveAgentWorker:
     def __init__(self, max_steps: int = 15, model: str | None = None):
         self.max_steps = max(1, min(int(max_steps), 15))
-        self.model = model or os.environ.get("LIVE_MODEL") or DEFAULT_MODEL
-        self.api_key = os.environ.get("OPENROUTER_API_KEY")
+        prov = providers.resolve()
+        self.url = prov.url
+        self.model = model or os.environ.get("LIVE_MODEL") or prov.default_model
+        self.api_key = prov.api_key
         if not self.api_key:
-            raise RuntimeError("OPENROUTER_API_KEY unset (live mode)")
+            raise RuntimeError(f"{prov.key_env} unset (live mode, provider {prov.name})")
         self.cost = 0.0
         self.steps = 0
         self.transcript: list[dict] = []
@@ -94,7 +97,7 @@ class LiveAgentWorker:
         payload = {"model": self.model, "messages": messages,
                    "temperature": 0.1, "max_tokens": max_tokens}
         req = urllib.request.Request(
-            OPENROUTER_URL, data=json.dumps(payload).encode(),
+            self.url, data=json.dumps(payload).encode(),
             headers={"Authorization": f"Bearer {self.api_key}",
                      "Content-Type": "application/json", "X-Title": "OOAA-agent"})
         with urllib.request.urlopen(req, timeout=60) as r:
