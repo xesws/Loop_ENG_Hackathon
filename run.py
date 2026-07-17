@@ -39,22 +39,27 @@ def parse_args():
     p.add_argument("--serve", action="store_true",
                    help="host the dashboard (add --replay FILE to animate a recording)")
     p.add_argument("--port", type=int, default=8000, help="--serve port (default 8000)")
+    p.add_argument("--plan", metavar="QUESTION",
+                   help="live planner: one LLM call -> validated plan_live.json")
+    p.add_argument("--plan-file", metavar="FILE",
+                   help="use this graph JSON for --mock instead of plan_cached.json")
     p.add_argument("--scenario",
                    choices=["green", "trap_b", "plateau", "hung", "trap_scope",
                             "trap_stale", "trap_taint"])
     return p.parse_args()
 
 
-def load_graph() -> schema.Graph:
-    g = schema.load_plan(REPO / "graph" / "plan_cached.json")
+def load_graph(plan_file: str | None = None) -> schema.Graph:
+    path = Path(plan_file) if plan_file else REPO / "graph" / "plan_cached.json"
+    g = schema.load_plan(path)
     errs = schema.validate(g)
     if errs:
         raise SystemExit("plan invalid:\n  " + "\n  ".join(errs))
     return normalizer.normalize(g)
 
 
-async def run_mock(scenario_name: str) -> RunResult:
-    g = load_graph()
+async def run_mock(scenario_name: str, plan_file: str | None = None) -> RunResult:
+    g = load_graph(plan_file)
     scenario = load_scenario(REPO / "scenarios" / f"{scenario_name}.yaml")
     ts = time.strftime("%Y%m%d-%H%M%S") + "-" + scenario_name
     run_dir = REPO / "runs" / ts
@@ -271,8 +276,25 @@ def serve(port: int, replay_file: str | None) -> int:
     return 0
 
 
+def _run_planner(question: str) -> int:
+    from graph.planner import generate_plan
+    ts = time.strftime("%Y%m%d-%H%M%S") + "-plan"
+    result = generate_plan(question, REPO / "runs" / ts,
+                           REPO / "graph" / "plan_cached.json")
+    print(json.dumps(result, indent=2))
+    if result["source"] == "live" and result["valid"]:
+        print(f"\nLIVE plan generated + validated -> {result['out']}  "
+              f"(cost ${result.get('cost')})")
+    else:
+        print(f"\nfell back to cached plan -> {result['out']}  "
+              f"(reason: {result.get('error')})")
+    return 0 if result["valid"] else 1
+
+
 def main() -> int:
     a = parse_args()
+    if a.plan is not None:
+        return _run_planner(a.plan)
     if a.serve:
         return serve(a.port, a.replay)
     if a.replay:
@@ -290,7 +312,7 @@ def main() -> int:
                          "--serve [--replay FILE] | --live")
     if not a.scenario:
         raise SystemExit("--mock requires --scenario")
-    result = asyncio.run(run_mock(a.scenario))
+    result = asyncio.run(run_mock(a.scenario, a.plan_file))
     return 0 if result.quiesced else 2
 
 
