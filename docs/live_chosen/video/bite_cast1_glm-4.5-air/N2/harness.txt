@@ -1,0 +1,1 @@
+node N2 (harness) produced artifact
