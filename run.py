@@ -47,7 +47,7 @@ def parse_args():
                    help="--live single node (e.g. N3): drive a real agent for it")
     p.add_argument("--scenario",
                    choices=["green", "trap_b", "plateau", "hung", "trap_scope",
-                            "trap_stale", "trap_taint"])
+                            "trap_stale", "trap_taint", "live_research"])
     return p.parse_args()
 
 
@@ -413,12 +413,34 @@ def _run_live_node(node_id: str) -> int:
     return 0 if (res["done"] and gr.ok) else 1
 
 
+def _n1_task() -> str:
+    return (
+        "You are node N1 (data) of an auto-research pipeline, working in your "
+        f"sandbox directory (your cwd). The repo root is {REPO}.\n"
+        f"Read-only inputs: {REPO}/data/train.jsonl (6 text-to-SQL rows) and "
+        f"{REPO}/data/split.json.\n"
+        "Goal: inspect the data and write data_notes.txt in your cwd with: the "
+        "row count, the dev split indices, and a one-line schema of a row.\n"
+        "Use ABSOLUTE paths for repo files. Allowed commands: ls, cat, head, "
+        "python, echo. When data_notes.txt is written, reply DONE."
+    )
+
+
+def _notes_ok(path: Path) -> bool:
+    try:
+        return path.exists() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 class _HybridWorker:
     """Full-graph live: drive a real agent for `live_nodes`, mock the rest.
     Falls back to the mock worker if the live agent is unavailable/fails."""
-    def __init__(self, mock, live_nodes):
+    def __init__(self, mock, live_nodes, max_steps=15, tracker=None):
         self.mock = mock
         self.live_nodes = set(live_nodes)
+        self.max_steps = max_steps
+        self.tracker = tracker if tracker is not None else {"cost": 0.0}
 
     def run_fast(self, node, scope_dir):
         if node.id not in self.live_nodes:
@@ -428,15 +450,142 @@ class _HybridWorker:
         from runtime.worker import NodeResult
         sp = Path(scope_dir)
         sp.mkdir(parents=True, exist_ok=True)
+        if node.id == "N1":
+            task, goal, check = _n1_task(), "data_notes.txt", _notes_ok
+        else:
+            task, goal, check = _live_task(node.id), "results.json", _manifest_ok
         try:
-            LiveAgentWorker(max_steps=15).run_node(
-                _live_task(node.id), sp, lambda: _manifest_ok(sp / "results.json"))
+            res = LiveAgentWorker(max_steps=self.max_steps).run_node(
+                task, sp, lambda: check(sp / goal))
+            self.tracker["cost"] += res.get("cost", 0.0)
+            if not res.get("done"):
+                print(f"[live {node.id}] goal not met; mock fallback", file=sys.stderr)
+                return self.mock.run_fast(node, sp)
         except Exception as e:
             print(f"[live {node.id}] unavailable ({e}); mock fallback", file=sys.stderr)
             return self.mock.run_fast(node, sp)
         man = read_manifest(sp / "results.json") if _manifest_ok(sp / "results.json") else None
-        return NodeResult(node=node.id, artifacts=["results.json"], manifest=man,
+        return NodeResult(node=node.id, artifacts=[goal], manifest=man,
                           events=["done"], duration_ticks=2)
+
+
+def _n4_manifest_hook(live_cfg, tracker):
+    """N4agent: a live agent stamps N4's manifest (frozen four-tuple via
+    make_manifest); returns None -> orchestrator falls back to world-state."""
+    def hook(nid, scope, score):
+        from runtime.fs import read_manifest
+        from runtime.real_worker import LiveAgentWorker
+        sp = Path(scope)
+        task = (
+            f"You are node {nid} (train) of an auto-research pipeline, working in "
+            "your sandbox directory (your cwd). Training just finished; "
+            f"best dev_metric={score:.4f}.\n"
+            "Stamp the results manifest by running:\n"
+            f"  python {REPO}/eval/make_manifest.py --node {nid} --score {score:.4f} --out results.json\n"
+            "Then reply DONE."
+        )
+        try:
+            res = LiveAgentWorker(max_steps=live_cfg.get("max_steps", 8)).run_node(
+                task, sp, lambda: _manifest_ok(sp / "results.json"))
+            tracker["cost"] += res.get("cost", 0.0)
+            if res.get("done"):
+                return read_manifest(sp / "results.json")
+        except Exception as e:
+            print(f"[live {nid} manifest] unavailable ({e}); world-state fallback",
+                  file=sys.stderr)
+        return None
+    return hook
+
+
+def _n5_hook(tracker):
+    """N5 live: one LLM call turns the two comparable manifests into analysis.md."""
+    def hook(nid, scope, manifests):
+        from runtime.real_worker import chat_once
+        try:
+            n3, n4 = manifests["N3"], manifests["N4"]
+            text, cost = chat_once(
+                "You are the analysis node of an auto-research pipeline. Be terse.",
+                f"Baseline N3 dev_metric={n3['score']}, method N4 "
+                f"dev_metric={n4['score']}, same frozen data/split/protocol/seed. "
+                "In 3 sentences: does the fine-tuned method beat the few-shot "
+                "baseline? Cite both numbers.")
+            tracker["cost"] += cost
+            sp = Path(scope)
+            sp.mkdir(parents=True, exist_ok=True)
+            (sp / "analysis.md").write_text(text + "\n", encoding="utf-8")
+        except Exception as e:
+            print(f"[live N5 analysis] unavailable ({e})", file=sys.stderr)
+    return hook
+
+
+def _n6_hook(tracker):
+    """N6 live: one LLM call polishes the anytime report (numbers verbatim)."""
+    def hook(nid, run_dir, _):
+        from runtime.real_worker import chat_once
+        try:
+            rpt = Path(run_dir) / "report" / "report.md"
+            if not rpt.exists():
+                rpt = Path(run_dir) / "report.md"
+            report = rpt.read_text(encoding="utf-8")
+            text, cost = chat_once(
+                "You polish research reports for a demo audience.",
+                "Keep every number and the verdict line verbatim; tighten to "
+                "<=10 lines of plain English:\n\n" + report[:3000])
+            tracker["cost"] += cost
+            (Path(run_dir) / "report_polished.md").write_text(text + "\n",
+                                                              encoding="utf-8")
+        except Exception as e:
+            print(f"[live N6 polish] unavailable ({e})", file=sys.stderr)
+    return hook
+
+
+async def run_live_research() -> RunResult:
+    """M10 LIVE-10: real data / real long node (real_train) / live agents
+    (N1/N3 fast, N4 manifest, N5/N6 one-shot) / real gates. N0/N2 scripted.
+    Everything new is gated behind scenarios/live_research.yaml; mock paths and
+    plan_cached.json are untouched (graph tweaks are in-memory only)."""
+    g = load_graph()
+    scenario = load_scenario(REPO / "scenarios" / "live_research.yaml")
+    live_cfg = scenario.live or {}
+    if scenario.compute_script:
+        g.nodes["N4"].compute.cmd[1] = scenario.compute_script
+    tick_s = 0.8                       # hung law K_FREEZE=3 ticks >> 1.8s stage cadence
+    g.budget.max_ticks = 1200          # 1200 * 0.8s = 960s ceiling (mock: 800*0.08)
+    if "N5->N4" in g.budget.max_laps:
+        g.budget.max_laps["N5->N4"] = min(g.budget.max_laps["N5->N4"],
+                                          int(live_cfg.get("max_laps", 2)))
+    ts = time.strftime("%Y%m%d-%H%M%S") + "-live_research"
+    run_dir = REPO / "runs" / ts
+    clock = TickClock()
+    log = IncidentLog(run_dir, keep_last=20)
+    sup = Supervisor(g, log, now=clock.now, baseline_id="N3", target=0.58)
+    tracker = {"cost": 0.0}
+    worker = _HybridWorker(MockWorker(scenario, REPO, tick_s),
+                           live_cfg.get("fast_nodes", ["N1", "N3"]),
+                           max_steps=int(live_cfg.get("max_steps", 8)),
+                           tracker=tracker)
+    orch = Orchestrator(
+        g, sup, worker, scenario, clock, run_dir, REPO, tick_s=tick_s,
+        long_manifest_hook=(_n4_manifest_hook(live_cfg, tracker)
+                            if live_cfg.get("n4_agent_manifest") else None),
+        n5_hook=_n5_hook(tracker) if live_cfg.get("n5_analysis") else None,
+        n6_hook=_n6_hook(tracker) if live_cfg.get("n6_polish") else None)
+    print(f"LIVE live_research: live agents {live_cfg.get('fast_nodes')} + "
+          f"N4agent(manifest) + N5/N6 one-shot; N4 compute="
+          f"{scenario.compute_script or 'scripts/sim_train.py'}; N0/N2 scripted. "
+          f"run_dir={run_dir}")
+    t0 = time.time()
+    result = await orch.run()
+    wall = time.time() - t0
+    cost = {"model": os.environ.get("LIVE_MODEL") or "default",
+            "cost_usd": round(tracker["cost"], 6), "wall_s": round(wall, 1),
+            "budget_usd": live_cfg.get("api_budget_usd", 3.0)}
+    (run_dir / "live_cost.json").write_text(json.dumps(cost, indent=2),
+                                            encoding="utf-8")
+    _print_summary(result)
+    print(f"wall_s={wall:.1f}  live_cost=${tracker['cost']:.4f} "
+          f"(budget ${cost['budget_usd']})")
+    return result
 
 
 async def run_live_full(live_nodes=("N3",)) -> RunResult:
@@ -468,6 +617,9 @@ def main() -> int:
     if a.live:
         if a.node:
             return _run_live_node(a.node)
+        if a.scenario == "live_research":
+            result = asyncio.run(run_live_research())
+            return 0 if result.quiesced else 2
         result = asyncio.run(run_live_full())      # full graph, N3 real agent
         return 0 if result.quiesced else 2
     if not a.mock:

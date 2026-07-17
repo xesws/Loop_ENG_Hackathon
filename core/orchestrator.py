@@ -53,10 +53,15 @@ class _Long:
 class Orchestrator:
     def __init__(self, graph: Graph, sup: Supervisor, worker: MockWorker,
                  scenario, clock, run_dir: Path, repo_root: Path,
-                 tick_s: float = 0.08):
+                 tick_s: float = 0.08, long_manifest_hook=None,
+                 n5_hook=None, n6_hook=None):
         self.g = graph
         self.sup = sup
         self.worker = worker
+        # optional live hooks (live_research only; None = unchanged mock behavior)
+        self.long_manifest_hook = long_manifest_hook
+        self.n5_hook = n5_hook
+        self.n6_hook = n6_hook
         self.scenario = scenario
         self.clock = clock
         self.run_dir = Path(run_dir)
@@ -159,6 +164,12 @@ class Orchestrator:
             node.step = recs[-1]["step"]
             node.best_dev = max(r["dev_metric"] for r in recs)
         score = node.best_dev if node.best_dev is not None else 0.0
+        if self.long_manifest_hook is not None:
+            m = self.long_manifest_hook(nid, scope, score)   # live agent; None -> world-state
+            if m is not None:
+                write_manifest(scope / "results.json", m)
+                self.results[nid] = m
+                return
         m = build_manifest(node, self.repo_root, score, scope,
                            wall_s=(node.step or 0) * self.tick_s,
                            overrides=self.scenario.override_for(nid))
@@ -283,6 +294,8 @@ class Orchestrator:
                 and self.g.nodes["N6"].status != Status.VERIFIED):
             self.g.nodes["N6"].tokens += 50
             self.sup.transition("N6", Status.VERIFIED, "report compiled")
+            if self.n6_hook is not None:
+                self.n6_hook("N6", self.run_dir, None)
         # N5/N6 finalize from world-state, not queued events; drain their wakes
         self.g.nodes["N5"].inbox.clear()
         self.g.nodes["N6"].inbox.clear()
@@ -298,6 +311,10 @@ class Orchestrator:
             if not verdict["answered"] and n4.status == Status.PLATEAUED:
                 self._spawn_n7()                     # graph surgery
             self.sup.transition("N5", Status.VERIFIED, "analysis done")
+            if self.n5_hook is not None:
+                self.n5_hook("N5", self._scope("N5"),
+                             {k: v.to_dict() for k, v in self.results.items()
+                              if k in ("N3", "N4")})
         else:
             self.sup.judge_comparability("N5", gr)   # blocks N5, blames deviator
         self.finalized.add("N5")
