@@ -1,0 +1,8 @@
+# Comparability trap: N4 "drops noisy samples", so its manifest carries a
+# data_hash that no longer matches the frozen baseline -> COMPARABILITY_BLOCK,
+# blame N4, N3 stays verified. (Training itself runs fine; the sin is the split.)
+name: trap_b
+profile: rise_cross
+overrides:
+  N4:
+    data_hash: "WRONG_HASH"
