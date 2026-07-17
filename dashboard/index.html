@@ -133,6 +133,33 @@
   #hovercard b{color:var(--ink)}#hovercard .k{color:var(--dim)}
   #hovercard .hl{font-weight:700;font-size:14px;margin-bottom:5px}
   html.stage #hovercard .hl{font-size:17px}
+  /* M15 evidence drawer — click an incident card; main UI untouched otherwise */
+  .inc{cursor:pointer}
+  .inc:hover{border-color:var(--running)}
+  #drawer{position:fixed;top:0;right:0;height:100vh;width:392px;max-width:94vw;z-index:50;
+    background:rgba(13,17,23,.98);border-left:1px solid var(--line);
+    box-shadow:-14px 0 36px rgba(0,0,0,.6);transform:translateX(106%);
+    transition:transform .3s cubic-bezier(.2,.9,.3,1);padding:16px 18px 24px;
+    overflow-y:auto;font-size:13px;line-height:1.5}
+  #drawer.show{transform:translateX(0)}
+  #drawer h3{margin:0 2px 2px;font-size:14px;letter-spacing:.02em}
+  #drawer .sub{color:var(--dim);font-size:12px;margin:0 2px 10px}
+  #drawer .drow{border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin:10px 0;
+    background:#161b22}
+  #drawer .drow .k{color:var(--dim);font-size:11px;text-transform:uppercase;
+    letter-spacing:.08em;display:block;margin-bottom:5px}
+  #drawer .withheld{color:var(--killed);font-weight:800;border:1px solid var(--killed);
+    border-radius:6px;padding:1px 7px;margin:4px 0 0 8px;font-size:12px;
+    display:inline-block;white-space:nowrap}
+  #drawer .hashrow{font-family:ui-monospace,monospace;font-size:12.5px;border-radius:7px;
+    padding:6px 8px;margin:3px 0;display:flex;justify-content:space-between;gap:10px}
+  #drawer .mismatch{background:rgba(248,81,73,.14);outline:1px solid var(--killed);color:#ffb3ad}
+  #drawer .fnote{color:var(--dim);font-size:12px;border-top:1px dashed var(--line);
+    padding-top:10px;margin-top:14px}
+  #dclose{position:absolute;top:10px;right:12px;background:none;border:1px solid var(--line);
+    color:var(--dim);border-radius:7px;font:14px ui-monospace,monospace;padding:2px 9px;
+    cursor:pointer}
+  #dclose:hover{color:var(--ink);border-color:var(--running)}
 </style>
 </head>
 <body>
@@ -175,6 +202,16 @@
     <div id="incidents"></div>
     <div id="legend"></div>
   </aside>
+</div>
+<div id="drawer" aria-hidden="true">
+  <button id="dclose" title="close (Esc)">✕</button>
+  <h3>Evidence drawer</h3>
+  <div class="sub" id="dsub"></div>
+  <div class="drow" id="dverdict"></div>
+  <div class="drow" id="dhash"></div>
+  <div class="drow" id="dchain"></div>
+  <div class="fnote">门只做哈希相等性判断，不读意图。<br>
+    The gate checks hash equality only — never intent.</div>
 </div>
 <script>
 const C = { running:'#2f81f7', verified:'#3fb950', stale:'#d29922', blocked:'#8b949e',
@@ -380,6 +417,8 @@ function renderIncidents(incs){
   const box=document.getElementById('incidents');box.innerHTML='';
   for(const i of incs.slice(-10).reverse()){
     const d=document.createElement('div');d.className='inc'+(KEY.has(i.type)?' key':'');
+    d.title='click for evidence';
+    d.onclick=()=>openDrawer(i);
     const col=RUNG[i.ladder_action]||'#8b949e';d.style.borderLeftColor=col;
     const ev=Object.entries(i.evidence||{}).slice(0,3)
       .map(([k,v])=>`${k}=${typeof v==='object'?JSON.stringify(v):v}`).join(' · ');
@@ -439,6 +478,61 @@ async function pollStatus(){
     if(busy){const c=document.getElementById('conn');c.textContent=st.state+(st.scenario?(' · '+st.scenario):'')+(rc.paused?' · paused':'');c.className='';}
   }catch(e){}
 }
+// ---------- evidence drawer (M15) ----------
+const drawer=document.getElementById('drawer');
+function shortHash(h){return (h==null?'—':String(h)).slice(0,12)}
+function openDrawer(i){
+  const ev=i.evidence||{};
+  document.getElementById('dsub').textContent=`tick ${i.ts} · ladder: ${i.ladder_action}`;
+  // ① verdict row: type · blame->node · red WITHHELD tag when the comparison is withheld
+  const withheld=i.type==='COMPARABILITY_BLOCK';
+  document.getElementById('dverdict').innerHTML=
+    `<span class="k">裁决 verdict</span><b>${i.type}</b> · blame → <b>${i.node}</b>`+
+    (withheld?'<span class="withheld">RESULT WITHHELD</span>':'');
+  // ② physical-evidence row: both data_hashes from the incident's own evidence
+  //    (baseline_tuple / deviator_tuple — no new fields, no manifest fetch)
+  const b=ev.baseline_tuple,dd=ev.deviator_tuple;
+  let hh=`<span class="k">物证 data_hash</span>`;
+  if(b&&dd){
+    const neq=b.data_hash!==dd.data_hash;
+    hh+=`<div class="hashrow${neq?' mismatch':''}"><span>baseline ${ev.baseline||''}</span><b>${shortHash(b.data_hash)}</b></div>`+
+        `<div class="hashrow${neq?' mismatch':''}"><span>deviator ${ev.deviator||i.node}</span><b>${shortHash(dd.data_hash)}</b></div>`+
+        (neq?`<div style="color:var(--killed);font-size:12px;margin-top:4px">`+
+             `哈希不等 → 不可比 · mismatch: ${(ev.mismatched_fields||[]).join(', ')||'data_hash'}</div>`:'');
+  }else{
+    hh+=`<div class="hashrow"><span>no four-tuple evidence on this incident</span></div>`;
+  }
+  document.getElementById('dhash').innerHTML=hh;
+  // ③ chain row: culprit + every currently-blocked node + the frozen baseline
+  const nodes=(lastState&&lastState.nodes)||[];
+  const seen=new Set(),parts=[];
+  const push=id=>{if(!id||seen.has(id))return;seen.add(id);
+    const n=nodes.find(x=>x.id===id);const st=n?n.status:'?';
+    parts.push(`${id} <b style="color:${C[st]||'#8b949e'}">${st}</b>`);};
+  push(i.node);
+  nodes.filter(n=>n.status==='blocked').forEach(n=>push(n.id));
+  push(ev.baseline);
+  document.getElementById('dchain').innerHTML=
+    `<span class="k">连锁 chain</span>`+(parts.join(' · ')||'—');
+  drawer.classList.add('show');drawer.setAttribute('aria-hidden','false');
+}
+function closeDrawer(){drawer.classList.remove('show');drawer.setAttribute('aria-hidden','true');}
+document.getElementById('dclose').onclick=closeDrawer;
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
+// deep-link #inc=<ts>: step the feed frame-by-frame until that incident is
+// visible, then open its drawer (deterministic; also used for the screenshot)
+async function deepLinkIncident(){
+  const m=(location.hash||'').match(/^#inc=(\d+)$/);if(!m)return;
+  const ts=+m[1];
+  for(let k=0;k<500;k++){
+    const inc=((lastState&&lastState.incidents)||[]).find(x=>x.ts===ts);
+    if(inc){openDrawer(inc);return;}
+    try{await fetch('/demo/ctl?op=step',{method:'POST'});}catch(e){}
+    await new Promise(r=>setTimeout(r,60));
+  }
+}
+deepLinkIncident();
+
 legend();loadQuestion();poll();pollStatus();
 setInterval(()=>{poll();pollStatus();},800);
 </script>
