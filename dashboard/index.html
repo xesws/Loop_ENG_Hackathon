@@ -21,7 +21,8 @@
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
-       font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+       font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+       display:flex;flex-direction:column;height:100vh}
   html.stage body{font-size:16px}
   header{display:flex;align-items:baseline;gap:14px;padding:10px 18px;flex-wrap:wrap;
          border-bottom:1px solid var(--line);background:var(--panel)}
@@ -55,7 +56,7 @@
   html.stage #bannerText{font-size:40px}
   #bannerText small{display:block;color:var(--dim);font-size:16px;font-weight:400;margin-top:12px}
   html.stage #bannerText small{font-size:22px}
-  #wrap{display:flex;height:calc(100vh - 46px)}
+  #wrap{display:flex;flex:1;min-height:0}
   #graphwrap{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
   #graph{flex:1;min-height:0}
   #narration{border-top:1px solid var(--line);background:#11161d;padding:12px 18px;
@@ -160,6 +161,32 @@
     color:var(--dim);border-radius:7px;font:14px ui-monospace,monospace;padding:2px 9px;
     cursor:pointer}
   #dclose:hover{color:var(--ink);border-color:var(--running)}
+  /* run-info panels (Run / Nodes / Prompt tabs) */
+  #panels{border-top:1px solid var(--line);background:#0d1117;flex:none}
+  #ptabs{display:flex;gap:4px;padding:5px 12px 0;align-items:center}
+  #ptabs button{font:12px ui-monospace,monospace;background:none;border:1px solid var(--line);
+    border-bottom:none;border-radius:7px 7px 0 0;color:var(--dim);padding:5px 14px;cursor:pointer}
+  #ptabs button.on{color:var(--ink);background:#161b22;border-color:var(--running)}
+  #ptabs button:hover{color:var(--ink)}
+  #pclose{margin-left:auto;border-radius:7px!important;border-bottom:1px solid var(--line)!important}
+  #pbody{height:196px;overflow-y:auto;padding:10px 16px;font-size:12.5px;line-height:1.55}
+  #panels.closed #pbody{display:none}
+  .pgrid{display:flex;gap:22px;flex-wrap:wrap}
+  .pcol{min-width:280px;flex:1}
+  .pk{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.07em;margin-right:6px}
+  .pulse{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--verified);
+    margin-right:7px;animation:pp 1s ease infinite}
+  @keyframes pp{50%{opacity:.25}}
+  .idledot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--dim);
+    margin-right:7px;opacity:.6}
+  table.nt{border-collapse:collapse;width:100%;font-size:12px}
+  table.nt td,table.nt th{border-bottom:1px solid #21262d;padding:3px 8px;text-align:left;
+    vertical-align:top}
+  table.nt th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase}
+  .pblock{border:1px solid var(--line);border-radius:8px;margin:8px 0;background:#161b22}
+  .pblock .ph{padding:5px 10px;color:var(--dim);font-size:11.5px;border-bottom:1px solid var(--line)}
+  .pblock pre{margin:0;padding:8px 10px;white-space:pre-wrap;word-break:break-word;
+    font-size:11.8px;max-height:160px;overflow-y:auto;color:var(--ink);font-family:ui-monospace,monospace}
 </style>
 </head>
 <body>
@@ -202,6 +229,19 @@
     <div id="incidents"></div>
     <div id="legend"></div>
   </aside>
+</div>
+<div id="panels">
+  <div id="ptabs">
+    <button data-t="run" class="on">Run</button>
+    <button data-t="nodes">Nodes</button>
+    <button data-t="prompt">Prompt</button>
+    <button id="pclose" title="collapse / expand">✕</button>
+  </div>
+  <div id="pbody">
+    <div id="pc-run"></div>
+    <div id="pc-nodes" style="display:none"></div>
+    <div id="pc-prompt" style="display:none"></div>
+  </div>
 </div>
 <div id="drawer" aria-hidden="true">
   <button id="dclose" title="close (Esc)">✕</button>
@@ -407,6 +447,7 @@ async function poll(){
     for(const k in focusCounters){if(focusCounters[k]>0){focus.add(k);focusCounters[k]--;}else delete focusCounters[k];}
     render(s,flash,focus);
     renderIncidents(s.incidents||[]);
+    renderRun();renderNodes();
     if(narrHold>0)narrHold--; else setNarr('SUPERVISOR',describeState(s),'var(--running)');
   }catch(e){
     document.getElementById('conn').textContent='disconnected';document.getElementById('conn').className='disc';
@@ -430,6 +471,7 @@ function renderIncidents(incs){
 }
 async function loadQuestion(){
   try{const g=await (await fetch('/plan_cached.json',{cache:'no-store'})).json();
+    PLAN=g;
     document.getElementById('question').textContent=g.research_question||'';}
   catch(e){document.getElementById('question').textContent='';}
 }
@@ -462,7 +504,7 @@ async function pollStatus(){
     const busy=st.state&&st.state!=='idle';
     document.querySelectorAll('#controls button').forEach(b=>b.disabled=busy);
     document.getElementById('rq').disabled=!!busy;
-    if(st.state!==window._lst){window._lst=st.state;if(st.state==='playing')loadQuestion();}
+    if(st.state!==window._lst){window._lst=st.state;if(st.state==='playing'){loadQuestion();loadRunDocs();}}
     const banner=document.getElementById('banner');
     if(st.state==='banner'||st.state==='preparing'){
       let head,sub;
@@ -533,7 +575,78 @@ async function deepLinkIncident(){
 }
 deepLinkIncident();
 
-legend();loadQuestion();poll();pollStatus();
+// ---------- run-info panels (Run / Nodes / Prompt tabs) ----------
+let PLAN=null,RUNINFO=null,PROMPTS=null,PTAB='run';
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+async function loadRunDocs(){
+  try{RUNINFO=await (await fetch('/runinfo.json',{cache:'no-store'})).json();}catch(e){RUNINFO=null;}
+  try{PROMPTS=await (await fetch('/prompts.json',{cache:'no-store'})).json();}catch(e){PROMPTS=null;}
+  renderPanels();
+}
+document.querySelectorAll('#ptabs button[data-t]').forEach(b=>b.onclick=()=>{
+  PTAB=b.dataset.t;
+  document.querySelectorAll('#ptabs button[data-t]').forEach(x=>x.classList.toggle('on',x===b));
+  for(const t of ['run','nodes','prompt'])document.getElementById('pc-'+t).style.display=(t===PTAB?'block':'none');
+  document.getElementById('panels').classList.remove('closed');
+  renderPanels();
+});
+document.getElementById('pclose').onclick=()=>document.getElementById('panels').classList.toggle('closed');
+// deep-link a tab: #tab=prompt (combinable with #inc=ts)
+const _tm=(location.hash||'').match(/tab=(run|nodes|prompt)/);
+if(_tm)document.querySelector(`#ptabs button[data-t="${_tm[1]}"]`).click();
+function renderPanels(){renderRun();renderNodes();renderPrompt();}
+function renderRun(){
+  const el=document.getElementById('pc-run');if(!el)return;
+  const act=((lastState&&lastState.nodes)||[]).filter(n=>n.status==='running');
+  let h='<div class="pgrid"><div class="pcol">';
+  h+=act.length
+    ?`<div style="margin-bottom:6px"><span class="pulse"></span><b>COMPUTING</b> — active: `+
+      act.map(n=>`${n.id}${n.kind==='long'&&n.step!=null?` (step ${n.step})`:''}`).join(', ')+`</div>`
+    :`<div style="margin-bottom:6px"><span class="idledot"></span>idle / quiesced — no node running</div>`;
+  if(RUNINFO){
+    const c=RUNINFO.compute;
+    h+=`<div><span class="pk">method</span>`+(c
+      ?(c.includes('real_train')?'<b>scripts/real_train.py</b> — real staged GBDT (long node)'
+        :`<b>${esc(c)}</b> — mock training curve`)
+      :'n/a')+`</div>`;
+    if(RUNINFO.bait)h+=`<div style="color:var(--killed)"><span class="pk">mode</span>BAIT CAST — adversarial decoy armed</div>`;
+    if(RUNINFO.planner)h+=`<div><span class="pk">planner</span>${esc(RUNINFO.planner.source)} · attempts ${RUNINFO.planner.attempts} · $${RUNINFO.planner.cost}</div>`;
+    if(RUNINFO.live_cost)h+=`<div><span class="pk">live model</span>${esc(RUNINFO.live_cost.model)} · $${RUNINFO.live_cost.cost_usd} · wall ${RUNINFO.live_cost.wall_s}s</div>`;
+    if(RUNINFO.run_dir)h+=`<div><span class="pk">run</span>${esc(RUNINFO.run_dir)}</div>`;
+  }
+  h+='</div><div class="pcol">';
+  const lu=RUNINFO&&RUNINFO.lineup;
+  if(lu&&Object.keys(lu).length){
+    h+='<table class="nt"><tr><th>node</th><th>role</th><th>behavior</th><th>actual</th></tr>'+
+      Object.entries(lu).map(([k,v])=>`<tr><td><b>${k}</b></td><td>${esc(v.role)}</td><td>${esc(v.behavior)}</td><td>${esc(v.actual)}</td></tr>`).join('')+'</table>';
+  }else{
+    h+='<div><span class="pk">lineup</span>mock / scripted run — every node is system-driven (no live agents)</div>';
+  }
+  h+='</div></div>';
+  el.innerHTML=h;
+}
+function renderNodes(){
+  const el=document.getElementById('pc-nodes');if(!el||!PLAN||!PLAN.nodes)return;
+  const st=(lastState&&lastState.nodes)||[];
+  el.innerHTML='<table class="nt"><tr><th>id</th><th>name</th><th>role</th><th>goal</th><th>scope</th><th>budget</th><th>now</th></tr>'+
+    PLAN.nodes.map(p=>{
+      const m=NODE_META[p.id]||{};const s=st.find(x=>x.id===p.id);
+      const chip=s?`<b style="color:${C[s.status]}">${STATUS_SHORT[s.status]||s.status}</b>`:'<span style="color:var(--dim)">–</span>';
+      return `<tr><td><b>${p.id}</b></td><td>${esc(m.name||'')}</td><td>${esc(p.role||'')}</td><td>${esc(m.goal||'')}</td><td>${esc(m.scope||'')}</td><td>${esc(m.budget||'')}</td><td>${chip}</td></tr>`;
+    }).join('')+'</table>';
+}
+function renderPrompt(){
+  const el=document.getElementById('pc-prompt');if(!el)return;
+  if(!PROMPTS){el.innerHTML='<span class="pk">loading…</span>';return;}
+  let h=`<div class="pblock"><div class="ph">research question (full text)</div><pre>${esc(PROMPTS.question)}</pre></div>`;
+  if(PROMPTS.bait)h+=`<div style="color:var(--killed);font-size:12px;margin:2px 0">⚠ this run was a BAIT CAST — the method node's brief carries an adversarial decoy (below, verbatim)</div>`;
+  for(const p of PROMPTS.prompts||[]){
+    h+=`<div class="pblock"><div class="ph">${p.node} · ${esc(p.role)} · ${esc(p.behavior)} · ${esc(p.source)}</div><pre>${esc(p.text)}</pre></div>`;
+  }
+  el.innerHTML=h;
+}
+
+legend();loadQuestion();loadRunDocs();poll();pollStatus();
 setInterval(()=>{poll();pollStatus();},800);
 </script>
 </body>

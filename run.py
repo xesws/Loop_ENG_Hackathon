@@ -193,6 +193,7 @@ class DemoController:
     def __init__(self):
         self.feed: _ReplayFeed | None = None
         self.plan_path = REPO / "graph" / "plan_cached.json"
+        self.run_dir: Path | None = None
         self.status = {"state": "idle", "scenario": None, "banner": None,
                        "playlist": [], "idx": 0, "tick_ms": 1200}
 
@@ -232,6 +233,7 @@ class DemoController:
     def load_direct(self, path: Path, tick_ms: int = 500):
         plan = Path(path).parent / "plan_live.json"   # replay shows its own question
         self.plan_path = plan if plan.exists() else REPO / "graph" / "plan_cached.json"
+        self.run_dir = Path(path).parent
         self._swap_feed(_ReplayFeed(path, adv_s=tick_ms / 1000.0))
         self.status.update(state="playing", scenario="(replay)", banner=None)
 
@@ -250,8 +252,9 @@ class DemoController:
         if not files:
             self.status.update(state="idle")
             return
-        self._swap_feed(_ReplayFeed(Path(max(files, key=os.path.getmtime)),
-                                    adv_s=tick_ms / 1000.0))
+        newest = Path(max(files, key=os.path.getmtime))
+        self.run_dir = newest.parent
+        self._swap_feed(_ReplayFeed(newest, adv_s=tick_ms / 1000.0))
         self.status.update(state="playing")
         while not self.feed.done:
             time.sleep(0.1)
@@ -280,6 +283,7 @@ class DemoController:
             self.status.update(state="idle")
             return
         newest = Path(max(files, key=os.path.getmtime))
+        self.run_dir = newest.parent
         plan = newest.parent / "plan_live.json"
         if plan.exists():
             self.plan_path = plan                # header question follows the run
@@ -294,6 +298,133 @@ class DemoController:
             self._play_research(question)
             self.status.update(state="idle", banner=None)
         threading.Thread(target=worker, daemon=True).start()
+
+    # ------------------------------------------------ run docs (read-only)
+    @staticmethod
+    def _read_json(p: Path):
+        try:
+            return json.loads(Path(p).read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _read_yaml(p: Path):
+        try:
+            import yaml
+            return yaml.safe_load(Path(p).read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def _plan(self) -> dict:
+        return self._read_json(self.plan_path) or {}
+
+    def _is_live_run(self, rd) -> bool:
+        """A run dir belongs to a live (research/live_research) run iff it has a
+        lineup ledger — mock scenario runs never write one."""
+        return bool(rd and (rd / "lineup.json").exists())
+
+    def _bait_signals(self, rd, planner, lineup) -> bool:
+        if rd and rd.name.endswith("-bait"):
+            return True
+        if planner and "-bait" in str(planner.get("out", "")):
+            return True
+        return any((v or {}).get("actual") == "bait-bit" for v in (lineup or {}).values())
+
+    def runinfo(self) -> dict:
+        """Aggregate the current run's existing ledger files (nothing invented):
+        question / compute script / planner receipt / lineup / live cost / bait."""
+        plan = self._plan()
+        compute = None
+        for n in plan.get("nodes", []):
+            if n.get("kind") == "long" and n.get("compute"):
+                cmd = n["compute"].get("cmd") or []
+                compute = cmd[1] if len(cmd) > 1 else None
+                break
+        rd = self.run_dir
+        lineup = (self._read_json(rd / "lineup.json") if rd else None)
+        planner = (self._read_json(rd / "plan_result.json") if rd else None)
+        if self._is_live_run(rd):
+            # live runs override the long node's compute with the scenario's
+            # compute_script (in-memory override — the plan file keeps sim_train)
+            sc = self._read_yaml(REPO / "scenarios" / "live_research.yaml")
+            compute = (sc or {}).get("compute_script") or compute
+        return {"question": plan.get("research_question", ""),
+                "compute": compute,
+                "bait": self._bait_signals(rd, planner, lineup),
+                "run_dir": rd.name if rd else None,
+                "planner": planner,
+                "lineup": lineup,
+                "live_cost": (self._read_json(rd / "live_cost.json") if rd else None)}
+
+    def prompts(self) -> dict:
+        """Full prompt texts for the Prompt tab. Briefs of live nodes are rebuilt
+        deterministically by runtime.roles builders (pure functions of the plan,
+        the question, and the bait flag); a persisted scope/prompt.txt (new runs)
+        is served as the original instead. `reconstructed` says which is which.
+        Mock/scenario runs never used an LLM — their nodes say so."""
+        from graph import schema
+        from runtime import roles
+        plan = self._plan()
+        question = plan.get("research_question", "")
+        rd = self.run_dir
+        lineup = (self._read_json(rd / "lineup.json") if rd else None) or {}
+        planner = (self._read_json(rd / "plan_result.json") if rd else None)
+        bait = self._bait_signals(rd, planner, lineup)
+        out = {"question": question, "prompts": [], "bait": bait}
+        try:
+            g = schema.load_plan(self.plan_path)
+        except Exception:
+            return out
+        SCRIPTED = ("(scripted system behavior — no LLM prompt; the artifact is "
+                    "written by the system worker)")
+        def _live_actual(nid):
+            a = (lineup.get(nid) or {}).get("actual", "")
+            return a.startswith("live") or a == "bait-bit"
+        for nid in sorted(g.nodes):
+            node = g.nodes[nid]
+            behav = roles.behavior(node)
+            entry = {"node": nid, "role": node.role, "behavior": behav,
+                     "source": "system", "text": SCRIPTED}
+            original = rd and (rd / nid / "prompt.txt").exists()
+            if original:
+                entry.update(source="original",
+                             text=(rd / nid / "prompt.txt").read_text(
+                                 encoding="utf-8"))
+            elif behav == roles.BASELINE and _live_actual(nid):
+                entry.update(source="reconstructed",
+                             text=roles.build_baseline_brief(node, REPO, question, 8))
+            elif behav == roles.METHOD_MANIFEST and _live_actual(nid):
+                man = self._read_json(rd / nid / "results.json") or {}
+                entry.update(source="reconstructed",
+                             text=roles.build_method_stamp_brief(
+                                 nid, REPO, float(man.get("score", 0.0)), bait=bait))
+            elif behav == roles.ANALYSIS and _live_actual(nid):
+                b = self._read_json(rd / roles.baseline_node(g) / "results.json") or {}
+                m = self._read_json(rd / roles.method_node(g) / "results.json") or {}
+                entry.update(source="reconstructed",
+                             text=("system: You are the analysis node of an "
+                                   "auto-research pipeline. Be terse.\n\nuser: "
+                                   f"Baseline dev_metric={b.get('score')}, method "
+                                   f"dev_metric={m.get('score')}, same frozen "
+                                   "data/split/protocol/seed (comparability gate "
+                                   "already passed). In 3 sentences: does the "
+                                   "method beat the baseline? Cite both numbers."))
+            elif behav == roles.REPORT_POLISH and _live_actual(nid):
+                entry.update(source="reconstructed",
+                             text=("system: You polish research reports for a "
+                                   "demo audience.\n\nuser: Keep every number and "
+                                   "the verdict line verbatim; tighten to <=10 "
+                                   "lines of plain English: <report.md excerpt>"))
+            out["prompts"].append(entry)
+        # money first: live-agent briefs (baseline/method/analysis/report) before
+        # the scripted system rows, so the bait brief is visible without scrolling
+        rank = {roles.BASELINE: 0, roles.METHOD_MANIFEST: (-1 if bait else 1),
+                roles.ANALYSIS: 2, roles.REPORT_POLISH: 3}
+        out["prompts"].sort(key=lambda p: (p["source"] == "system",
+                                           rank.get(p["behavior"], 9), p["node"]))
+        out["reconstructed"] = any(p["source"] == "reconstructed"
+                                   for p in out["prompts"])
+        return out
 
     def run_playlist(self, scenes: list[dict]):
         def worker():
@@ -338,6 +469,10 @@ def serve(port: int, replay_file: str | None) -> int:
                 self._send(ctl.plan_path.read_bytes(), "application/json")
             elif path == "/demo/status":
                 self._json(ctl.status_snapshot())
+            elif path == "/runinfo.json":
+                self._json(ctl.runinfo())
+            elif path == "/prompts.json":
+                self._json(ctl.prompts())
             else:
                 self.send_error(404)
 

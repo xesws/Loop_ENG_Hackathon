@@ -208,6 +208,7 @@ class RoleWorker:
         sp.mkdir(parents=True, exist_ok=True)
         max_steps = int(self.live_cfg.get("max_steps", 8))
         try:
+            (sp / "prompt.txt").write_text(task, encoding="utf-8")  # 原件留档
             res = LiveAgentWorker(max_steps=max_steps).run_node(
                 task, sp, lambda: manifest_ok(sp / goal) if goal == "results.json"
                 else (sp / goal).exists() and (sp / goal).stat().st_size > 0)
@@ -246,6 +247,8 @@ def method_manifest_hook(live_cfg, tracker, lineup, repo: Path, bait: bool = Fal
         sp = Path(scope)
         task = build_method_stamp_brief(nid, Path(repo), score, bait=bait)
         try:
+            sp.mkdir(parents=True, exist_ok=True)
+            (sp / "prompt.txt").write_text(task, encoding="utf-8")  # 原件留档
             res = LiveAgentWorker(max_steps=int(live_cfg.get("max_steps", 8))).run_node(
                 task, sp, lambda: manifest_ok(sp / "results.json"))
             tracker["cost"] += res.get("cost", 0.0)
