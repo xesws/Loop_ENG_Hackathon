@@ -4,25 +4,34 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Graph Supervisor — Auto-Research</title>
-<!-- Fully self-contained: no external JS/CSS, zero CDN, zero network beyond
-     the local --serve host. state.json schema is frozen; we only read it. -->
+<!-- Fully self-contained: no external JS/CSS, zero CDN, zero network beyond the
+     local --serve host. state.json schema is frozen; we only read it.
+     ?stage=1  -> presentation mode (bigger, higher contrast for a projector). -->
 <style>
   :root{
     --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
     --running:#2f81f7; --verified:#3fb950; --stale:#d29922; --blocked:#8b949e;
     --stuck:#db6d28; --killed:#f85149; --superseded:#a371f7; --pending:#30363d;
+    --nfont:13px; --subfont:11px; --cardfont:12px; --narrfont:15px; --nstroke:2.5;
+  }
+  html.stage{
+    --ink:#ffffff; --dim:#b9c2cc;
+    --nfont:19px; --subfont:15px; --cardfont:15px; --narrfont:23px; --nstroke:3.5;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
-       font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-  header{display:flex;align-items:baseline;gap:14px;padding:12px 18px;flex-wrap:wrap;
+       font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  html.stage body{font-size:16px}
+  header{display:flex;align-items:baseline;gap:14px;padding:10px 18px;flex-wrap:wrap;
          border-bottom:1px solid var(--line);background:var(--panel)}
-  header h1{font-size:15px;margin:0;font-weight:600}
+  header h1{font-size:15px;margin:0;font-weight:700;letter-spacing:.02em}
+  html.stage header h1{font-size:19px}
   header .q{color:var(--dim);font-size:13px;flex:1;min-width:0;
             overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  html.stage header .q{font-size:15px}
   header .meta{font-size:13px;color:var(--ink)}
   header .meta b{color:var(--running)}
-  #controls{display:flex;gap:8px;align-items:center}
+  #controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   #controls button{font:13px ui-monospace,monospace;color:var(--ink);background:#21262d;
     border:1px solid var(--line);border-radius:7px;padding:7px 13px;cursor:pointer}
   #controls button:hover:not(:disabled){border-color:var(--running)}
@@ -31,45 +40,79 @@
     font-size:14px;padding:7px 16px}
   #demoExtBtn{background:var(--stale);color:#0d1117;font-weight:700;border-color:var(--stale);
     font-size:14px;padding:7px 16px}
+  #connbar{display:none;background:var(--killed);color:#fff;text-align:center;
+    font-weight:700;padding:5px;font-size:13px}
+  #connbar.show{display:block}
   #banner{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
-    background:rgba(13,17,23,.93);z-index:10}
+    background:rgba(13,17,23,.94);z-index:20}
   #banner.show{display:flex}
-  #bannerText{font-size:26px;font-weight:700;color:var(--ink);max-width:72%;text-align:center;
-    border-left:6px solid var(--running);padding:20px 30px;background:#161b22;border-radius:12px}
-  #bannerText small{display:block;color:var(--dim);font-size:14px;font-weight:400;margin-top:8px}
-  #wrap{display:flex;height:calc(100vh - 50px)}
-  #graph{flex:1;min-width:0}
-  aside{width:320px;border-left:1px solid var(--line);background:var(--panel);
+  #bannerText{font-size:28px;font-weight:800;color:var(--ink);max-width:74%;text-align:center;
+    border-left:8px solid var(--running);padding:24px 34px;background:#161b22;border-radius:14px}
+  html.stage #bannerText{font-size:40px}
+  #bannerText small{display:block;color:var(--dim);font-size:16px;font-weight:400;margin-top:12px}
+  html.stage #bannerText small{font-size:22px}
+  #wrap{display:flex;height:calc(100vh - 46px)}
+  #graphwrap{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
+  #graph{flex:1;min-height:0}
+  #narration{border-top:1px solid var(--line);background:#11161d;padding:12px 18px;
+    display:flex;align-items:center;gap:12px;font-size:var(--narrfont);min-height:52px}
+  html.stage #narration{padding:18px 22px;min-height:74px}
+  #narration .tag{font-size:11px;font-weight:800;padding:3px 9px;border-radius:6px;
+    color:#0d1117;background:var(--dim);white-space:nowrap}
+  html.stage #narration .tag{font-size:14px;padding:5px 11px}
+  #narration .txt{color:var(--ink)}
+  aside{width:340px;border-left:1px solid var(--line);background:var(--panel);
         display:flex;flex-direction:column}
-  aside h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;
+  html.stage aside{width:400px}
+  aside h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;
            color:var(--dim);margin:0;padding:12px 14px 6px}
-  #incidents{overflow:auto;padding:0 10px 12px}
+  html.stage aside h2{font-size:14px}
+  #incidents{overflow:auto;padding:0 10px 12px;flex:1}
   .inc{border:1px solid var(--line);border-left:4px solid var(--dim);border-radius:8px;
-       padding:8px 10px;margin:6px 0;background:#1c2230;animation:slidein .35s ease}
+       padding:8px 11px;margin:7px 0;background:#1c2230;animation:slidein .35s ease}
+  html.stage .inc{padding:11px 13px;border-left-width:6px}
   @keyframes slidein{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
   .inc .row1{display:flex;align-items:center;gap:8px}
-  .badge{font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;color:#0d1117}
+  .badge{font-size:11px;font-weight:800;padding:2px 8px;border-radius:6px;color:#0d1117}
+  html.stage .badge{font-size:14px;padding:3px 9px}
   .inc .node{margin-left:auto;color:var(--dim);font-size:12px}
-  .inc .ev{color:var(--dim);font-size:12px;margin-top:4px;word-break:break-word}
+  html.stage .inc .node{font-size:14px}
+  .inc .ev{color:var(--dim);font-size:var(--cardfont);margin-top:5px;word-break:break-word}
+  .inc .say{color:var(--ink);font-size:var(--cardfont);margin-top:5px}
   .rung{font-size:11px;color:var(--dim)}
-  #legend{display:flex;flex-wrap:wrap;gap:6px 12px;padding:8px 14px;
-          border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
-  #legend span{display:inline-flex;align-items:center;gap:5px}
-  #legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
-  text{fill:var(--ink);font:12px ui-monospace,monospace}
-  .nlabel{font-weight:700;font-size:13px}
-  .nsub{fill:var(--dim);font-size:10px}
+  #legend{padding:10px 14px;border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
+  html.stage #legend{font-size:13px}
+  #legend .row{display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:8px}
+  #legend .row:last-child{margin-bottom:0}
+  #legend span{display:inline-flex;align-items:center;gap:6px}
+  #legend i{width:12px;height:12px;border-radius:3px;display:inline-block}
+  #legend svg{vertical-align:middle}
+  text{fill:var(--ink);font-family:ui-monospace,monospace}
+  .nlabel{font-weight:800;font-size:var(--nfont)}
+  .nsub{font-weight:700;font-size:var(--subfont)}
+  .nmeta{fill:var(--dim);font-size:calc(var(--subfont) - 1px)}
   .edge{stroke:var(--line);stroke-width:2;fill:none}
-  .edge.stream{stroke-dasharray:5 5;stroke:#3d4655}
-  .edge.back{stroke-dasharray:2 4;stroke:#5a3a7a}
-  .node-shape{stroke-width:2.5;transition:fill .3s,stroke .3s}
+  html.stage .edge{stroke-width:2.8}
+  .edge.stream{stroke-dasharray:6 6;stroke:#55607a}
+  .edge.back{stroke-dasharray:2 5;stroke:#7d5aa8}
+  .node-shape{stroke-width:var(--nstroke);transition:fill .3s,stroke .3s}
   .flash{animation:flashred 1s ease 0s 2}
   @keyframes flashred{0%,100%{stroke:#f85149;filter:none}
-    50%{stroke:#ff6b60;filter:drop-shadow(0 0 8px #f85149)}}
+    50%{stroke:#ff6b60;filter:drop-shadow(0 0 10px #f85149)}}
+  .focusring{animation:focus 2s ease}
+  @keyframes focus{0%{filter:drop-shadow(0 0 0 #f0f6fc)}
+    35%{filter:drop-shadow(0 0 14px #f0f6fc)}100%{filter:drop-shadow(0 0 0 #f0f6fc)}}
   .grow{animation:grow .5s cubic-bezier(.2,1.4,.5,1)}
   @keyframes grow{from{opacity:0;transform:scale(.2)}to{opacity:1;transform:scale(1)}}
-  .bar-bg{fill:#21262d} .bar-fill{fill:var(--running)} .bar-base{stroke:#f0f6fc;stroke-width:1.5}
+  .bar-bg{fill:#21262d}.bar-base{stroke:#f0f6fc;stroke-width:1.5}
   .disc{color:var(--stale)}
+  #hovercard{position:absolute;z-index:15;display:none;max-width:300px;pointer-events:none;
+    background:#0d1117;border:1px solid var(--line);border-left:4px solid var(--running);
+    border-radius:9px;padding:10px 12px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  html.stage #hovercard{font-size:14px;max-width:360px}
+  #hovercard b{color:var(--ink)}#hovercard .k{color:var(--dim)}
+  #hovercard .hl{font-weight:700;font-size:14px;margin-bottom:5px}
+  html.stage #hovercard .hl{font-size:17px}
 </style>
 </head>
 <body>
@@ -89,9 +132,14 @@
   </div>
   <div class="meta">tick <b id="tick">–</b> · report <b id="rv">–</b> · <span id="conn" class="disc">connecting…</span></div>
 </header>
+<div id="connbar">⚠ lost connection to the run server — is <code>python run.py --serve</code> still running?</div>
 <div id="banner"><div id="bannerText"></div></div>
 <div id="wrap">
-  <svg id="graph" viewBox="0 0 1120 420" preserveAspectRatio="xMidYMid meet"></svg>
+  <div id="graphwrap">
+    <svg id="graph" viewBox="0 0 1120 430" preserveAspectRatio="xMidYMid meet"></svg>
+    <div id="hovercard"></div>
+    <div id="narration"><span class="tag" id="narrtag">READY</span><span class="txt" id="narrtxt">Waiting for a run…</span></div>
+  </div>
   <aside>
     <h2>Incident stream (newest first)</h2>
     <div id="incidents"></div>
@@ -104,154 +152,232 @@ const C = { running:'#2f81f7', verified:'#3fb950', stale:'#d29922', blocked:'#8b
   superseded:'#a371f7', pending:'#30363d' };
 const RUNG = { fuse:'#f85149', graph_surgery:'#a371f7', blame_routing:'#d29922',
   downstream_invalidation:'#db6d28', bounce:'#2f81f7' };
-// fixed layered layout (positions are stable; N7 appears in place on spawn)
-const POS = { N0:[70,210], N1:[195,210], N2:[320,210], N3:[470,110], N4:[470,300],
-  N4e:[610,300], N5:[760,210], N6:[905,210], N7:[760,350] };
+// human-readable status phrases (shown in the legend + hover card)
+const STATUS_PHRASE = { pending:'queued', running:'working', verified:'verified ✓',
+  blocked:'blocked / withheld', stale:'stale — re-running', stuck:'stuck (no progress)',
+  oscillating:'oscillating', plateaued:'plateaued — early-stopped',
+  killed:'killed', superseded:'retired' };
+// short forms for the node sub-label (avoid overlap); full phrases stay in legend/hover
+const STATUS_SHORT = { pending:'queued', running:'working', verified:'verified ✓',
+  blocked:'blocked', stale:'stale', stuck:'stuck', oscillating:'oscillating',
+  plateaued:'plateaued', killed:'killed', superseded:'retired' };
+// static per-node description (state.json is frozen and has no goal/scope/budget)
+const NODE_META = {
+  N0:{name:'Protocol',      goal:'Write the data card + eval protocol spec', scope:'protocol/',      budget:'fast'},
+  N1:{name:'Data',          goal:'Prepare and split the dataset',            scope:'data_prep/',     budget:'fast'},
+  N2:{name:'Freeze harness',goal:'Freeze the eval harness/protocol',         scope:'eval/ (frozen)', budget:'fast'},
+  N3:{name:'Baseline eval', goal:'Score the few-shot large-model baseline',  scope:'baseline/',      budget:'target 0.58'},
+  N4:{name:'Fine-tune',     goal:'Fine-tune a small model (long training)',  scope:'method/',        budget:'gpu:1 · eps 0.005, patience 2'},
+  N4e:{name:'Ckpt eval',    goal:'Evaluate each checkpoint on the dev slice',scope:'method/ckpt',    budget:'reactive · wakes on N4/ckpt'},
+  N5:{name:'Analysis',      goal:'Compare method vs baseline; may spawn nodes',scope:'analysis/',    budget:'reactive · can_spawn'},
+  N6:{name:'Report',        goal:'Compile the anytime report',              scope:'report/',        budget:'reactive'},
+  N7:{name:'Ablation',      goal:'Explain the plateau (spawned at runtime)', scope:'ablation/',      budget:'fast · spawned by N5'} };
+const POS = { N0:[70,215], N1:[195,215], N2:[320,215], N3:[470,115], N4:[470,305],
+  N4e:[610,305], N5:[760,215], N6:[905,215], N7:[760,355] };
 const EDGES = [
   ['N0','N1','artifact'],['N1','N2','artifact'],['N2','N3','artifact'],
   ['N2','N4','artifact'],['N2','N4e','artifact'],
   ['N4','N4e','stream'],['N3','N5','stream'],['N4e','N5','stream'],['N5','N6','stream'],
   ['N5','N4','back'],['N5','N7','artifact'] ];
 const SVG='http://www.w3.org/2000/svg';
+const STAGE = new URLSearchParams(location.search).get('stage')==='1';
+if(STAGE) document.documentElement.classList.add('stage');
+const NS = STAGE?1.22:1;                 // node-size scale in stage mode
 const svg=document.getElementById('graph');
-let lastIncCount=0, seenNodes=new Set(), flashCounters={}; // node -> polls of red flash left
+let lastState=null, lastIncCount=0, seenNodes=new Set(), flashCounters={};
 
 function el(t,a={}){const e=document.createElementNS(SVG,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
-function edgePath(a,b){const[x1,y1]=POS[a],[x2,y2]=POS[b];return `M${x1},${y1} L${x2},${y2}`;}
+function fmt(x){return (x==null)?'–':(+x).toFixed(3);}
 
+// ---------- narration ----------
+const NARR = {
+  PLATEAU_TRIP:(i)=> i.ladder_action==='graph_surgery'
+    ? `Graph surgery — N5 spawns ablation node ${i.node} to explain the plateau; the freed GPU goes to it.`
+    : `${i.node} plateaued: 2 checkpoints with no real gain → early-stopped at the best checkpoint (${fmt(i.evidence&&i.evidence.best_dev)} < ${(i.evidence&&i.evidence.target)||0.58}). Negative result recorded.`,
+  SCOPE_VIOLATION:(i)=> `${i.node} reached into another node's directory — out of its lane. Intercepted, reverted, and ${i.node} is blamed.`,
+  COMPARABILITY_BLOCK:(i)=> `${i.node}'s data no longer matches the frozen baseline (${((i.evidence&&i.evidence.mismatched_fields)||['data_hash']).join(', ')}) → result withheld. The baseline stands.`,
+  HUNG_RESTART:(i)=> (i.evidence&&i.evidence.action==='kill')
+    ? `${i.node} stalled again after a restart → killed; best checkpoint kept.`
+    : `${i.node} stalled — restarting from the last checkpoint (once).`,
+  STALE_CASCADE:(i)=> `Upstream ${(i.evidence&&i.evidence.reopened_upstream)||''} reopened → ${i.node} goes stale and will auto re-run.`,
+  TAINT_INVALIDATION:(i)=> `Protocol changed → ${i.node}'s reading is invalidated for re-eval; the training itself is spared.`,
+  SUPERSEDED_KILL:(i)=> `${i.node}'s reason to exist is gone → retired (best checkpoint kept).`,
+  OSCILLATION_TRIP:(i)=> `${i.node} is oscillating (A→B→A) — no real progress. Bounced.`,
+  BUDGET_TRIP:(i)=> `${i.node} is stuck — fingerprint frozen while budget burns. Bounced.`,
+  FALSE_COMPLETION:(i)=> `${i.node} claimed done but failed acceptance → bounced to retry.` };
+function sayIncident(i){ return (NARR[i.type]?NARR[i.type](i):`${i.type} on ${i.node}.`); }
+function describeState(s){
+  const by=Object.fromEntries(s.nodes.map(n=>[n.id,n]));
+  const n4=by.N4;
+  if(n4 && n4.status==='running' && n4.step!=null)
+    return `N4 fine-tuning — step ${n4.step}, dev ${fmt(n4.best_dev)} vs baseline 0.58 ${(+n4.best_dev>=0.58)?'(ahead)':'(behind but climbing)'}.`;
+  if(!s.nodes.length) return 'Ready. Pick a scenario, or press ▶ DEMO.';
+  const allv=s.nodes.every(n=>n.status==='verified');
+  if(allv) return 'All nodes verified — research answered: the fine-tuned model beats the baseline.';
+  const running=s.nodes.filter(n=>n.status==='running').map(n=>n.id);
+  if(running.length) return `Supervising — ${running.join(', ')} working; no barriers, siblings run in parallel.`;
+  return 'Supervising the graph…';
+}
+let narrTag='READY', narrTxt='Waiting for a run…', narrHold=0;
+function setNarr(tag,txt,col){
+  narrTag=tag;narrTxt=txt;
+  document.getElementById('narrtag').textContent=tag;
+  document.getElementById('narrtag').style.background=col||'var(--dim)';
+  document.getElementById('narrtxt').textContent=txt;
+}
+
+// ---------- graph ----------
 function drawEdges(present){
   for(const[a,b,kind]of EDGES){
     if(!POS[a]||!POS[b])continue;
     if((a==='N7'||b==='N7')&&!present.has('N7'))continue;
-    let cls='edge'+(kind==='stream'?' stream':kind==='back'?' back':'');
-    if(kind==='back'){
-      const[x1,y1]=POS[a],[x2,y2]=POS[b];
-      svg.appendChild(el('path',{class:cls,d:`M${x1},${y1} C ${x1},${y1+90} ${x2},${y2+90} ${x2},${y2}`}));
-    } else svg.appendChild(el('path',{class:cls,d:edgePath(a,b)}));
+    const cls='edge'+(kind==='stream'?' stream':kind==='back'?' back':'');
+    if(kind==='back'){const[x1,y1]=POS[a],[x2,y2]=POS[b];
+      svg.appendChild(el('path',{class:cls,d:`M${x1},${y1} C ${x1},${y1+95} ${x2},${y2+95} ${x2},${y2}`}));
+    } else {const[x1,y1]=POS[a],[x2,y2]=POS[b];
+      svg.appendChild(el('path',{class:cls,d:`M${x1},${y1} L${x2},${y2}`}));}
   }
-  // back-edge meter label
-  svg.appendChild(el('text',{x:615,y:295,class:'nsub'})).textContent='lap ≤ 3';
+  svg.appendChild(el('text',{x:632,y:300,class:'nmeta'})).textContent='lap ≤ 3';
 }
-
 function shape(kind,x,y,fill){
-  if(kind==='fast'){const g=el('rect',{x:x-32,y:y-20,width:64,height:40,rx:8,
-    class:'node-shape',fill,stroke:'#c9d1d9'});return g;}
-  if(kind==='long'){return el('circle',{cx:x,cy:y,r:28,class:'node-shape',fill,stroke:'#c9d1d9'});}
-  // reactive diamond
-  const p=`${x},${y-26} ${x+30},${y} ${x},${y+26} ${x-30},${y}`;
+  if(kind==='fast'){const w=64*NS,h=40*NS;return el('rect',{x:x-w/2,y:y-h/2,width:w,height:h,rx:8,
+    class:'node-shape',fill,stroke:'#c9d1d9'});}
+  if(kind==='long'){return el('circle',{cx:x,cy:y,r:28*NS,class:'node-shape',fill,stroke:'#c9d1d9'});}
+  const r=28*NS;const p=`${x},${y-r} ${x+r*1.08},${y} ${x},${y+r} ${x-r*1.08},${y}`;
   return el('polygon',{points:p,class:'node-shape',fill,stroke:'#c9d1d9'});
 }
-
-function render(state, flashNodes){
+function render(state, flashNodes, focusNodes){
   svg.innerHTML='';
   const present=new Set(state.nodes.map(n=>n.id));
   drawEdges(present);
   for(const n of state.nodes){
     if(!POS[n.id])continue;
     const[x,y]=POS[n.id];
-    const g=el('g',{});
-    if(!seenNodes.has(n.id)){g.setAttribute('class','grow');seenNodes.add(n.id);}
+    const g=el('g',{'data-node':n.id});g.style.cursor='pointer';
+    if(!seenNodes.has(n.id)){g.classList.add('grow');seenNodes.add(n.id);}
+    if(focusNodes&&focusNodes.has(n.id))g.classList.add('focusring');
     const sh=shape(n.kind,x,y,C[n.status]||C.pending);
-    if(flashNodes.has(n.id))sh.setAttribute('class','node-shape flash');
+    if(flashNodes.has(n.id))sh.classList.add('flash');
     g.appendChild(sh);
     const lbl=el('text',{x,y:y-2,'text-anchor':'middle',class:'nlabel'});lbl.textContent=n.id;g.appendChild(lbl);
-    const st=el('text',{x,y:y+12,'text-anchor':'middle',class:'nsub'});st.textContent=n.status;g.appendChild(st);
-    // long node: step + best_dev bar with baseline tick at 0.58
+    const st=el('text',{x,y:y+15,'text-anchor':'middle',class:'nsub',fill:(C[n.status]||'#9aa')});
+    st.textContent=(STATUS_SHORT[n.status]||n.status);g.appendChild(st);
     if(n.kind==='long'&&(n.step!=null||n.best_dev!=null)){
-      const bw=76,bx=x-bw/2,by=y+34,bd=n.best_dev==null?0:n.best_dev,MAX=0.8;
-      g.appendChild(el('rect',{x:bx,y:by,width:bw,height:8,rx:4,class:'bar-bg'}));
-      g.appendChild(el('rect',{x:bx,y:by,width:Math.max(0,Math.min(1,bd/MAX))*bw,height:8,rx:4,
+      const bw=88*NS,bx=x-bw/2,by=y+30*NS,bd=n.best_dev==null?0:n.best_dev,MAX=0.8,bh=9;
+      g.appendChild(el('rect',{x:bx,y:by,width:bw,height:bh,rx:4,class:'bar-bg'}));
+      g.appendChild(el('rect',{x:bx,y:by,width:Math.max(0,Math.min(1,bd/MAX))*bw,height:bh,rx:4,
         fill:bd>=0.58?C.verified:C.running}));
-      const tick=bx+(0.58/MAX)*bw;
-      g.appendChild(el('line',{x1:tick,y1:by-2,x2:tick,y2:by+10,class:'bar-base'}));
-      const t=el('text',{x,y:by+22,'text-anchor':'middle',class:'nsub'});
-      t.textContent=`step ${n.step??'–'} · dev ${bd?bd.toFixed(3):'–'} (base .58)`;g.appendChild(t);
+      const tk=bx+(0.58/MAX)*bw;
+      g.appendChild(el('line',{x1:tk,y1:by-3,x2:tk,y2:by+bh+3,class:'bar-base'}));
+      const t=el('text',{x,y:by+bh+16,'text-anchor':'middle',class:'nmeta'});
+      t.textContent=`step ${n.step==null?'–':n.step} · dev ${bd?bd.toFixed(3):'–'} (base .58)`;g.appendChild(t);
     }
     svg.appendChild(g);
   }
 }
 
-function renderIncidents(incs){
-  const box=document.getElementById('incidents');box.innerHTML='';
-  const recent=incs.slice(-10).reverse();
-  for(const i of recent){
-    const d=document.createElement('div');d.className='inc';
-    const col=RUNG[i.ladder_action]||'#8b949e';
-    d.style.borderLeftColor=col;
-    const ev=Object.entries(i.evidence||{}).slice(0,3)
-      .map(([k,v])=>`${k}=${typeof v==='object'?JSON.stringify(v):v}`).join(' · ');
-    d.innerHTML=`<div class="row1"><span class="badge" style="background:${col}">${i.type}</span>`+
-      `<span class="node">${i.node} · <span class="rung">${i.ladder_action}</span> · t${i.ts}</span></div>`+
-      `<div class="ev">${ev||''}</div>`;
-    box.appendChild(d);
-  }
+// ---------- hover card (event-delegated; survives re-renders) ----------
+const hc=document.getElementById('hovercard');
+function showCard(id,cx,cy){
+  const n=lastState&&lastState.nodes.find(x=>x.id===id); const m=NODE_META[id]||{};
+  if(!n&&!m.name){hc.style.display='none';return;}
+  const kindword={fast:'fast agent',long:'long training',reactive:'reactive'}[(n&&n.kind)]||'';
+  let rows=`<div class="hl">${id} — ${m.name||''} <span class="k">(${kindword})</span></div>`;
+  rows+=`<div><span class="k">goal:</span> ${m.goal||''}</div>`;
+  rows+=`<div><span class="k">scope:</span> <b>${m.scope||''}</b></div>`;
+  rows+=`<div><span class="k">budget:</span> ${m.budget||''}</div>`;
+  if(n){rows+=`<div><span class="k">status:</span> <b style="color:${C[n.status]}">${STATUS_PHRASE[n.status]||n.status}</b>`
+    +` · laps ${n.laps} · tokens ${n.tokens}</div>`;
+    if(n.kind==='long')rows+=`<div><span class="k">progress:</span> step ${n.step==null?'–':n.step} · best_dev ${fmt(n.best_dev)}</div>`;}
+  hc.innerHTML=rows;hc.style.display='block';
+  const r=svg.getBoundingClientRect(),wr=document.getElementById('graphwrap').getBoundingClientRect();
+  let px=cx-wr.left+14, py=cy-wr.top+14;
+  if(px+320>wr.width)px=cx-wr.left-320; if(py+140>wr.height)py=cy-wr.top-140;
+  hc.style.left=Math.max(4,px)+'px';hc.style.top=Math.max(4,py)+'px';
 }
+svg.addEventListener('mousemove',e=>{const g=e.target.closest('[data-node]');
+  if(g)showCard(g.getAttribute('data-node'),e.clientX,e.clientY);else hc.style.display='none';});
+svg.addEventListener('mouseleave',()=>hc.style.display='none');
 
+// ---------- legend ----------
 function legend(){
   const L=document.getElementById('legend');
-  const items=[['running','running'],['verified','verified'],['blocked','blocked'],
-    ['stuck','stuck/osc'],['plateaued','plateaued/killed'],['superseded','superseded'],['stale','stale']];
-  L.innerHTML='<span>▭ fast &nbsp; ● long &nbsp; ◆ reactive</span>'+
-    items.map(([k,t])=>`<span><i style="background:${C[k]}"></i>${t}</span>`).join('');
+  const stat=[['running','working'],['verified','verified'],['blocked','blocked/withheld'],
+    ['stale','stale (re-running)'],['stuck','stuck/oscillating'],
+    ['plateaued','plateaued/killed'],['superseded','retired']];
+  const el2=(d,dash,col)=>`<svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="${col}" stroke-width="2.4" ${dash}></line></svg>`;
+  L.innerHTML=
+    `<div class="row"><span>▭ fast agent</span><span>● long training</span><span>◆ reactive</span></div>`+
+    `<div class="row">`+stat.map(([k,t])=>`<span><i style="background:${C[k]}"></i>${t}</span>`).join('')+`</div>`+
+    `<div class="row"><span>${el2(0,'','#8b949e')} artifact — hard dep</span>`+
+    `<span>${el2(0,'stroke-dasharray="6 6"','#55607a')} stream — subscription</span>`+
+    `<span>${el2(0,'stroke-dasharray="2 5"','#7d5aa8')} metered back-edge</span></div>`;
 }
 
+// ---------- poll ----------
 async function poll(){
   try{
     const r=await fetch('/state.json',{cache:'no-store'});
     if(!r.ok)throw 0;
-    const s=await r.json();
-    document.getElementById('conn').textContent='live';
-    document.getElementById('conn').className='';
+    const s=await r.json();lastState=s;
+    document.getElementById('conn').textContent='live';document.getElementById('conn').className='';
+    document.getElementById('connbar').classList.remove('show');
     document.getElementById('tick').textContent=s.ts;
     document.getElementById('rv').textContent='v'+s.report_version;
-    // detect new incidents -> flash their nodes red, and keep the flash alive for
-    // ~3 polls so a full-SVG re-render on the next poll doesn't cut it short.
-    if((s.incidents||[]).length>lastIncCount){
-      for(const i of s.incidents.slice(lastIncCount))flashCounters[i.node]=5;
-    }
+    const fresh=(s.incidents||[]).slice(lastIncCount);
+    if(fresh.length){for(const i of fresh)flashCounters[i.node]=5;
+      const i=fresh[fresh.length-1];setNarr(i.type,sayIncident(i),RUNG[i.ladder_action]);narrHold=6;}
     lastIncCount=(s.incidents||[]).length;
     const flash=new Set();
     for(const k in flashCounters){if(flashCounters[k]>0){flash.add(k);flashCounters[k]--;}}
     render(s,flash);
     renderIncidents(s.incidents||[]);
+    if(narrHold>0)narrHold--; else setNarr('SUPERVISOR',describeState(s),'var(--running)');
   }catch(e){
-    document.getElementById('conn').textContent='waiting for run…';
-    document.getElementById('conn').className='disc';
+    document.getElementById('conn').textContent='disconnected';document.getElementById('conn').className='disc';
+    document.getElementById('connbar').classList.add('show');
+  }
+}
+function renderIncidents(incs){
+  const box=document.getElementById('incidents');box.innerHTML='';
+  for(const i of incs.slice(-10).reverse()){
+    const d=document.createElement('div');d.className='inc';
+    const col=RUNG[i.ladder_action]||'#8b949e';d.style.borderLeftColor=col;
+    const ev=Object.entries(i.evidence||{}).slice(0,3)
+      .map(([k,v])=>`${k}=${typeof v==='object'?JSON.stringify(v):v}`).join(' · ');
+    d.innerHTML=`<div class="row1"><span class="badge" style="background:${col}">${i.type}</span>`+
+      `<span class="node">${i.node} · <span class="rung">${i.ladder_action}</span> · t${i.ts}</span></div>`+
+      `<div class="say">${sayIncident(i)}</div><div class="ev">${ev||''}</div>`;
+    box.appendChild(d);
   }
 }
 async function loadQuestion(){
-  try{const r=await fetch('/plan_cached.json',{cache:'no-store'});
-    const g=await r.json();document.getElementById('question').textContent=g.research_question||'';}
-  catch(e){document.getElementById('question').textContent='(research question unavailable)';}
+  try{const g=await (await fetch('/plan_cached.json',{cache:'no-store'})).json();
+    document.getElementById('question').textContent=g.research_question||'';}
+  catch(e){document.getElementById('question').textContent='';}
 }
 
-// ---- demo controls (buttons + hands-free playlist) ----
+// ---------- demo controls ----------
 const DEMO_TICK_MS=1200;
-async function post(url){
-  try{const r=await fetch(url,{method:'POST'});
-    if(r.status===409){const c=document.getElementById('conn');c.textContent='a run is active';c.className='disc';}}
-  catch(e){}
-}
+async function post(url){try{const r=await fetch(url,{method:'POST'});
+  if(r.status===409){const c=document.getElementById('conn');c.textContent='a run is active';c.className='disc';}}catch(e){}}
 document.querySelectorAll('.sc').forEach(b=>b.onclick=()=>post('/run?scenario='+b.dataset.s+'&tick_ms='+DEMO_TICK_MS));
 document.getElementById('demoBtn').onclick=()=>post('/demo');
 document.getElementById('demoExtBtn').onclick=()=>post('/demo?playlist=extended');
-
 async function pollStatus(){
   try{
     const st=await (await fetch('/demo/status',{cache:'no-store'})).json();
     const busy=st.state&&st.state!=='idle';
     document.querySelectorAll('#controls button').forEach(b=>b.disabled=busy);
     const banner=document.getElementById('banner');
-    if((st.state==='banner'||st.state==='preparing')){
+    if(st.state==='banner'||st.state==='preparing'){
       const txt=st.state==='banner'?(st.banner||''):('Preparing '+(st.scenario||'')+' …');
       document.getElementById('bannerText').innerHTML=txt+(st.state==='banner'?'<small>next scene starting…</small>':'');
       banner.classList.add('show');
     }else banner.classList.remove('show');
-    if(busy){const c=document.getElementById('conn');
-      c.textContent=st.state+(st.scenario?(' · '+st.scenario):'');c.className='';}
+    if(busy){const c=document.getElementById('conn');c.textContent=st.state+(st.scenario?(' · '+st.scenario):'');c.className='';}
   }catch(e){}
 }
-
 legend();loadQuestion();poll();pollStatus();
 setInterval(()=>{poll();pollStatus();},800);
 </script>
