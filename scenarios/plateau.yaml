@@ -1,0 +1,7 @@
+# The money shot: N4 (rise_plateau) saturates ~0.53, never reaching the 0.58
+# baseline. best_dev improvement < eps for 2 consecutive ckpts -> PLATEAU_TRIP at
+# ~40%: kill keeping the best ckpt, write the negative result, free the gpu slot.
+# N5 then does graph surgery, spawning N7 (ablation) which runs and verifies.
+name: plateau
+profile: rise_plateau
+overrides: {}
