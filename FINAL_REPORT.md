@@ -26,6 +26,18 @@ the five acceptance commands below are pasted **verbatim**.
 - **M5** — `core/replay.py` + `run.py --replay` (pure re-render, no execution).
 - **Stretch** — `hung` scenario (HUNG_RESTART → kill); `RealWorker` import-only stub
   behind `--live`; `dashboard/index.html` stub.
+- **M6 (dashboard, mock)** — `dashboard/index.html`: single self-contained page
+  (zero external JS/CSS, zero CDN), polls `/state.json` every 800 ms, renders the
+  research graph (shape by kind ▭ fast / ● long / ◆ reactive; colour by status),
+  the long node's step + best_dev progress bar (with a 0.58 baseline tick), a live
+  incident stream (last 10, newest first, ladder-coloured badges), and a topbar
+  (research question + tick + report_version). New incidents flash their node red;
+  N7 grows in on spawn. `run.py --serve [--port N]` statically hosts the dashboard
+  and `/state.json` (live: newest `runs/*/state.json`; `--serve --replay FILE`:
+  animates a recording at ~2 Hz) — solves the `file://` fetch restriction. Bound to
+  `127.0.0.1` via stdlib `http.server` (not a web framework). Verified in Chrome:
+  zero console errors, all page requests localhost-only, animation identical in
+  live and replay modes. Screenshot: `docs/dashboard.png`.
 
 Every milestone was committed on `main` (`git log --oneline`: M0…M5).
 
@@ -42,7 +54,17 @@ Every milestone was committed on `main` (`git log --oneline`: M0…M5).
 - **SCOPE_VIOLATION / stale-cascade / taint** are implemented and unit-tested in the
   supervisor but not wired to a runtime scenario tonight (they are the venue traps
   A and the STALE_CASCADE set piece for tomorrow).
-- **`dashboard/index.html`** is an intentional stub (tomorrow's first venue task).
+- **Frozen `state.json` schema gap (recorded, not patched).** `state.json` is
+  `{ts, nodes, incidents, report_version}` and carries **no research-question
+  field** and **no `spawned`/edge info**. Per the iron rule (schema frozen after
+  M1, do not change), the dashboard reads the research question from
+  `/plan_cached.json` (served read-only) instead, and derives node shapes from the
+  `nodes[].kind` field that *is* present. Node `kind`, `step`, `best_dev`, `fp8`,
+  and per-node `status` are all in the frozen schema, which is sufficient for every
+  required visual. No schema change was made.
+- The two `chrome-extension://…` entries in the browser Network panel are the
+  Claude-in-Chrome automation extension's own content scripts (injected by the test
+  harness), **not** requests the dashboard makes — the page itself is localhost-only.
 - **Timing is soft, outcomes are hard**: the exact tick a metrics/ckpt line is first
   observed can shift ±1 tick, but detectors key on step-space trajectories and
   monotone curves, so statuses/incidents are invariant. Replay is hard-deterministic.

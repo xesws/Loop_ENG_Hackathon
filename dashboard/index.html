@@ -1,11 +1,201 @@
 <!doctype html>
-<!-- Empty stub for tonight. Tomorrow (venue): poll ../runs/<ts>/state.json every
-     1s, render the graph coloured by node status + lap meters + the incident
-     stream. state.json is the ONLY interface and its schema is frozen. -->
 <html lang="en">
-<head><meta charset="utf-8"><title>Graph Supervisor — Dashboard (stub)</title></head>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graph Supervisor — Auto-Research</title>
+<!-- Fully self-contained: no external JS/CSS, zero CDN, zero network beyond
+     the local --serve host. state.json schema is frozen; we only read it. -->
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --running:#2f81f7; --verified:#3fb950; --stale:#d29922; --blocked:#8b949e;
+    --stuck:#db6d28; --killed:#f85149; --superseded:#a371f7; --pending:#30363d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  header{display:flex;align-items:baseline;gap:18px;padding:12px 18px;
+         border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{font-size:15px;margin:0;font-weight:600}
+  header .q{color:var(--dim);font-size:13px;flex:1;min-width:0;
+            overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  header .meta{font-size:13px;color:var(--ink)}
+  header .meta b{color:var(--running)}
+  #wrap{display:flex;height:calc(100vh - 50px)}
+  #graph{flex:1;min-width:0}
+  aside{width:320px;border-left:1px solid var(--line);background:var(--panel);
+        display:flex;flex-direction:column}
+  aside h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;
+           color:var(--dim);margin:0;padding:12px 14px 6px}
+  #incidents{overflow:auto;padding:0 10px 12px}
+  .inc{border:1px solid var(--line);border-left:4px solid var(--dim);border-radius:8px;
+       padding:8px 10px;margin:6px 0;background:#1c2230;animation:slidein .35s ease}
+  @keyframes slidein{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+  .inc .row1{display:flex;align-items:center;gap:8px}
+  .badge{font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;color:#0d1117}
+  .inc .node{margin-left:auto;color:var(--dim);font-size:12px}
+  .inc .ev{color:var(--dim);font-size:12px;margin-top:4px;word-break:break-word}
+  .rung{font-size:11px;color:var(--dim)}
+  #legend{display:flex;flex-wrap:wrap;gap:6px 12px;padding:8px 14px;
+          border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
+  #legend span{display:inline-flex;align-items:center;gap:5px}
+  #legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+  text{fill:var(--ink);font:12px ui-monospace,monospace}
+  .nlabel{font-weight:700;font-size:13px}
+  .nsub{fill:var(--dim);font-size:10px}
+  .edge{stroke:var(--line);stroke-width:2;fill:none}
+  .edge.stream{stroke-dasharray:5 5;stroke:#3d4655}
+  .edge.back{stroke-dasharray:2 4;stroke:#5a3a7a}
+  .node-shape{stroke-width:2.5;transition:fill .3s,stroke .3s}
+  .flash{animation:flashred 1s ease 0s 2}
+  @keyframes flashred{0%,100%{stroke:#f85149;filter:none}
+    50%{stroke:#ff6b60;filter:drop-shadow(0 0 8px #f85149)}}
+  .grow{animation:grow .5s cubic-bezier(.2,1.4,.5,1)}
+  @keyframes grow{from{opacity:0;transform:scale(.2)}to{opacity:1;transform:scale(1)}}
+  .bar-bg{fill:#21262d} .bar-fill{fill:var(--running)} .bar-base{stroke:#f0f6fc;stroke-width:1.5}
+  .disc{color:var(--stale)}
+</style>
+</head>
 <body>
-  <h1>Graph Supervisor for Auto-Research</h1>
-  <p>Dashboard stub. Reads <code>runs/&lt;ts&gt;/state.json</code> (frozen schema).</p>
+<header>
+  <h1>Graph Supervisor</h1>
+  <div class="q" id="question">loading…</div>
+  <div class="meta">tick <b id="tick">–</b> · report <b id="rv">–</b> · <span id="conn" class="disc">connecting…</span></div>
+</header>
+<div id="wrap">
+  <svg id="graph" viewBox="0 0 1120 420" preserveAspectRatio="xMidYMid meet"></svg>
+  <aside>
+    <h2>Incident stream (newest first)</h2>
+    <div id="incidents"></div>
+    <div id="legend"></div>
+  </aside>
+</div>
+<script>
+const C = { running:'#2f81f7', verified:'#3fb950', stale:'#d29922', blocked:'#8b949e',
+  stuck:'#db6d28', oscillating:'#db6d28', plateaued:'#f85149', killed:'#f85149',
+  superseded:'#a371f7', pending:'#30363d' };
+const RUNG = { fuse:'#f85149', graph_surgery:'#a371f7', blame_routing:'#d29922',
+  downstream_invalidation:'#db6d28', bounce:'#2f81f7' };
+// fixed layered layout (positions are stable; N7 appears in place on spawn)
+const POS = { N0:[70,210], N1:[195,210], N2:[320,210], N3:[470,110], N4:[470,300],
+  N4e:[610,300], N5:[760,210], N6:[905,210], N7:[760,350] };
+const EDGES = [
+  ['N0','N1','artifact'],['N1','N2','artifact'],['N2','N3','artifact'],
+  ['N2','N4','artifact'],['N2','N4e','artifact'],
+  ['N4','N4e','stream'],['N3','N5','stream'],['N4e','N5','stream'],['N5','N6','stream'],
+  ['N5','N4','back'],['N5','N7','artifact'] ];
+const SVG='http://www.w3.org/2000/svg';
+const svg=document.getElementById('graph');
+let lastIncCount=0, seenNodes=new Set();
+
+function el(t,a={}){const e=document.createElementNS(SVG,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
+function edgePath(a,b){const[x1,y1]=POS[a],[x2,y2]=POS[b];return `M${x1},${y1} L${x2},${y2}`;}
+
+function drawEdges(present){
+  for(const[a,b,kind]of EDGES){
+    if(!POS[a]||!POS[b])continue;
+    if((a==='N7'||b==='N7')&&!present.has('N7'))continue;
+    let cls='edge'+(kind==='stream'?' stream':kind==='back'?' back':'');
+    if(kind==='back'){
+      const[x1,y1]=POS[a],[x2,y2]=POS[b];
+      svg.appendChild(el('path',{class:cls,d:`M${x1},${y1} C ${x1},${y1+90} ${x2},${y2+90} ${x2},${y2}`}));
+    } else svg.appendChild(el('path',{class:cls,d:edgePath(a,b)}));
+  }
+  // back-edge meter label
+  svg.appendChild(el('text',{x:615,y:295,class:'nsub'})).textContent='lap ≤ 3';
+}
+
+function shape(kind,x,y,fill){
+  if(kind==='fast'){const g=el('rect',{x:x-32,y:y-20,width:64,height:40,rx:8,
+    class:'node-shape',fill,stroke:'#c9d1d9'});return g;}
+  if(kind==='long'){return el('circle',{cx:x,cy:y,r:28,class:'node-shape',fill,stroke:'#c9d1d9'});}
+  // reactive diamond
+  const p=`${x},${y-26} ${x+30},${y} ${x},${y+26} ${x-30},${y}`;
+  return el('polygon',{points:p,class:'node-shape',fill,stroke:'#c9d1d9'});
+}
+
+function render(state, flashNodes){
+  svg.innerHTML='';
+  const present=new Set(state.nodes.map(n=>n.id));
+  drawEdges(present);
+  for(const n of state.nodes){
+    if(!POS[n.id])continue;
+    const[x,y]=POS[n.id];
+    const g=el('g',{});
+    if(!seenNodes.has(n.id)){g.setAttribute('class','grow');seenNodes.add(n.id);}
+    const sh=shape(n.kind,x,y,C[n.status]||C.pending);
+    if(flashNodes.has(n.id))sh.setAttribute('class','node-shape flash');
+    g.appendChild(sh);
+    const lbl=el('text',{x,y:y-2,'text-anchor':'middle',class:'nlabel'});lbl.textContent=n.id;g.appendChild(lbl);
+    const st=el('text',{x,y:y+12,'text-anchor':'middle',class:'nsub'});st.textContent=n.status;g.appendChild(st);
+    // long node: step + best_dev bar with baseline tick at 0.58
+    if(n.kind==='long'&&(n.step!=null||n.best_dev!=null)){
+      const bw=76,bx=x-bw/2,by=y+34,bd=n.best_dev==null?0:n.best_dev,MAX=0.8;
+      g.appendChild(el('rect',{x:bx,y:by,width:bw,height:8,rx:4,class:'bar-bg'}));
+      g.appendChild(el('rect',{x:bx,y:by,width:Math.max(0,Math.min(1,bd/MAX))*bw,height:8,rx:4,
+        fill:bd>=0.58?C.verified:C.running}));
+      const tick=bx+(0.58/MAX)*bw;
+      g.appendChild(el('line',{x1:tick,y1:by-2,x2:tick,y2:by+10,class:'bar-base'}));
+      const t=el('text',{x,y:by+22,'text-anchor':'middle',class:'nsub'});
+      t.textContent=`step ${n.step??'–'} · dev ${bd?bd.toFixed(3):'–'} (base .58)`;g.appendChild(t);
+    }
+    svg.appendChild(g);
+  }
+}
+
+function renderIncidents(incs){
+  const box=document.getElementById('incidents');box.innerHTML='';
+  const recent=incs.slice(-10).reverse();
+  for(const i of recent){
+    const d=document.createElement('div');d.className='inc';
+    const col=RUNG[i.ladder_action]||'#8b949e';
+    d.style.borderLeftColor=col;
+    const ev=Object.entries(i.evidence||{}).slice(0,3)
+      .map(([k,v])=>`${k}=${typeof v==='object'?JSON.stringify(v):v}`).join(' · ');
+    d.innerHTML=`<div class="row1"><span class="badge" style="background:${col}">${i.type}</span>`+
+      `<span class="node">${i.node} · <span class="rung">${i.ladder_action}</span> · t${i.ts}</span></div>`+
+      `<div class="ev">${ev||''}</div>`;
+    box.appendChild(d);
+  }
+}
+
+function legend(){
+  const L=document.getElementById('legend');
+  const items=[['running','running'],['verified','verified'],['blocked','blocked'],
+    ['stuck','stuck/osc'],['plateaued','plateaued/killed'],['superseded','superseded'],['stale','stale']];
+  L.innerHTML='<span>▭ fast &nbsp; ● long &nbsp; ◆ reactive</span>'+
+    items.map(([k,t])=>`<span><i style="background:${C[k]}"></i>${t}</span>`).join('');
+}
+
+async function poll(){
+  try{
+    const r=await fetch('/state.json',{cache:'no-store'});
+    if(!r.ok)throw 0;
+    const s=await r.json();
+    document.getElementById('conn').textContent='live';
+    document.getElementById('conn').className='';
+    document.getElementById('tick').textContent=s.ts;
+    document.getElementById('rv').textContent='v'+s.report_version;
+    // detect new incidents -> flash their nodes red
+    const flash=new Set();
+    if((s.incidents||[]).length>lastIncCount){
+      for(const i of s.incidents.slice(lastIncCount))flash.add(i.node);
+    }
+    lastIncCount=(s.incidents||[]).length;
+    render(s,flash);
+    renderIncidents(s.incidents||[]);
+  }catch(e){
+    document.getElementById('conn').textContent='waiting for run…';
+    document.getElementById('conn').className='disc';
+  }
+}
+async function loadQuestion(){
+  try{const r=await fetch('/plan_cached.json',{cache:'no-store'});
+    const g=await r.json();document.getElementById('question').textContent=g.research_question||'';}
+  catch(e){document.getElementById('question').textContent='(research question unavailable)';}
+}
+legend();loadQuestion();poll();setInterval(poll,800);
+</script>
 </body>
 </html>
