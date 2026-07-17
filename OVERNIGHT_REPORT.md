@@ -47,7 +47,86 @@ cheap default model.
   the data_hash divergence — the actual trap_b signal — is genuine. The mock
   trap_b/trap_scope remain the rehearsed demo path; this is live proof the mechanism
   fires on a real agent. Probe cost ~$0.0009. Live spend ≈ **$0.0026 / $15**, ~4 runs.
-- **T5 M9c pitch package** — pending.
-- **T6 regression + merge + report** — pending.
+- **T5 M9c pitch package** — DONE. `docs/PITCH.md`: 3-minute line-by-line English
+  script, 7-slide skeleton, Q&A crib (AIDE=node-internal vs us=inter-node; Agent
+  Laboratory counterexample; LLM-judge flip rate; roadmap proxy/docker/portfolio),
+  the "is this live?" standard answer (wired to the T2/T3/T4 live evidence), and a
+  venue demo operation checklist.
+- **T6 regression + merge + report** — DONE. Full regression green (below); merged
+  `overnight` → `main` and pushed.
 
-_(evidence and final checklist appended as tasks complete)_
+## Final regression (T6)
+
+```
+pytest -q                       -> 45 passed
+--mock --scenario green         -> exit 0     (RESEARCH ANSWERED)
+--mock --scenario trap_b        -> exit 0     (COMPARABILITY_BLOCK, node N4)
+--mock --scenario plateau       -> exit 0     (PLATEAU_TRIP + negative + N7 verified)
+--mock --scenario hung          -> exit 0     (HUNG_RESTART -> kill)
+--mock --scenario trap_scope    -> exit 0     (SCOPE_VIOLATION, revert + blame)
+--mock --scenario trap_stale    -> exit 0     (STALE_CASCADE x6 -> re-green)
+--mock --scenario trap_taint    -> exit 0     (TAINT_INVALIDATION, training spared)
+▶ DEMO (default playlist)       -> starts (plateau -> trap_scope), unchanged
+--replay <plateau>              -> exit 0
+```
+
+## Live budget fuse (rule E) — final
+
+Model `openai/gpt-4o-mini` via OpenRouter (key from env, never committed). Total
+live spend ≈ **$0.003 / $15**; ~4 agent runs of ≤25; each run ≤15 steps. Never
+approached the fuse. `LIVE_MODEL` env overrides the model; no key hardcoded.
+
+## What's new on `main` for the morning
+
+- 2 new mock scenarios: `trap_stale` (STALE_CASCADE amber wave) + `trap_taint`
+  (TAINT_INVALIDATION, spares training) → **7 mock scenarios total**.
+- Dashboard: `trap_stale`/`trap_taint` buttons + **▶ DEMO+** (extended playlist).
+  Default **▶ DEMO** (plateau→trap_scope) untouched.
+- Live planner: `python run.py --plan "<question>"` → validated `plan_live.json`.
+- Live worker: `python run.py --live --node N3` (real agent passes the gate) and
+  `python run.py --live` (full graph, N3 real agent). Needs `OPENROUTER_API_KEY`;
+  degrades gracefully without it.
+- Evidence images/artifacts in `docs/`: `dashboard.png`, `dashboard_demo.png`,
+  `dashboard_stale.png`, `live_trap_manifest.json`, `live_trap_evidence.json`,
+  `PITCH.md`.
+
+## Morning 10-minute verification checklist
+
+1. **Clone + install + one click.** On the laptop that will present:
+   `git clone <repo> && cd OOAA && pip install networkx pyyaml pytest rich`,
+   then `pytest -q` (expect **45 passed**).
+2. `python run.py --mock --scenario plateau` → expect `exit 0`, `PLATEAU_TRIP`,
+   `N7 verified`, the negative-result line.
+3. `python run.py --serve` → open `http://127.0.0.1:8000/` → click **▶ DEMO** →
+   watch plateau climb→red→N7, then trap_scope. Then **▶ DEMO+** for the amber wave.
+4. Console shows zero errors; Network shows only `127.0.0.1`.
+5. (Only if Wi-Fi + `OPENROUTER_API_KEY`) `python run.py --plan "<a question>"` →
+   `valid: true`; `python run.py --live --node N3` → `acceptance=PASS`.
+6. If anything is off, the mock path + `--replay` are the guaranteed fallback.
+
+## Demo-day quick-start commands
+
+```bash
+pip install networkx pyyaml pytest rich          # deps (rich optional)
+pytest -q                                        # 45 green
+python run.py --serve                            # dashboard at http://127.0.0.1:8000/
+#   click ▶ DEMO   (plateau → trap_scope)   — rehearsed A-path
+#   click ▶ DEMO+  (adds trap_stale amber wave + trap_taint)
+python run.py --mock --scenario {green|trap_b|plateau|hung|trap_scope|trap_stale|trap_taint}
+python run.py --replay runs/<ts>/replay.jsonl    # zero-dependency fallback
+# live (optional, needs OPENROUTER_API_KEY):
+python run.py --plan "Does RAG beat a fine-tuned baseline on medical QA?"
+python run.py --live --node N3
+```
+
+## BLOCKED / SKIPPED / caveats (honest)
+
+- **mini-swe-agent not installed** → used the workbook's blessed bash-loop fallback
+  (`LiveAgentWorker`). The `RealWorker` stub (mini-swe-agent adapter) is intentionally
+  left raising so its unit test stays green; swapping in mini-swe-agent later is a
+  drop-in behind the same interface.
+- **T4 live manifest** had placeholder fields from the small model, but the
+  `data_hash` divergence (the real trap_b signal) is genuine and gate-caught.
+- **Live full-graph** drives a real agent on N3 only (N4 compute stays sim_train per
+  spec); a fuller live fan-out is future work. The mock path is the demo of record.
+- No secrets committed; `.gitignore` covers `runs/`, `.env`, keys.
