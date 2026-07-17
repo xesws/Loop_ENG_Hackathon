@@ -73,7 +73,10 @@ def main() -> int:
         return replay_render(Path(a.replay))
     if a.live:
         from runtime.worker import RealWorker
-        RealWorker()          # raises: live path is tomorrow's work
+        try:
+            RealWorker()      # raises: live path (mini-swe-agent) is tomorrow's work
+        except NotImplementedError as e:
+            print(f"--live is not wired tonight: {e}", file=sys.stderr)
         return 1
     if not a.scenario:
         raise SystemExit("--mock requires --scenario")

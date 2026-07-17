@@ -1,0 +1,6 @@
+# Bonus: the trainer stalls (step stops advancing after ~20%). The supervisor
+# restarts it from the last checkpoint once (HUNG_RESTART); on a repeat stall it
+# kills the node. best ckpt kept, gpu freed.
+name: hung
+profile: hang
+overrides: {}
