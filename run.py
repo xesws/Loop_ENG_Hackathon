@@ -607,6 +607,9 @@ async def run_live_full(live_nodes=("N3",)) -> RunResult:
 
 def main() -> int:
     a = parse_args()
+    if a.live or a.plan is not None:
+        from runtime.real_worker import load_dotenv
+        load_dotenv()                       # .env defaults (real env wins)
     if a.plan is not None:
         return _run_planner(a.plan)
     if a.serve:

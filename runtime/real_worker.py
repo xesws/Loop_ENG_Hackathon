@@ -24,6 +24,21 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "openai/gpt-4o-mini"
 CMD_TIMEOUT = 25
 
+
+def load_dotenv() -> None:
+    """stdlib .env loader (repo root): KEY=VALUE lines, real env always wins."""
+    env = Path(__file__).resolve().parent.parent / ".env"
+    if not env.exists():
+        return
+    for line in env.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+load_dotenv()
+
 _ALLOW = {"ls", "cat", "head", "tail", "wc", "grep", "find", "sort", "uniq",
           "awk", "sed", "echo", "pwd", "python", "python3", "true", "nl", "cut"}
 _DENY = ("rm ", "rm-", "rmdir", "shutil", "os.remove", "os.unlink", "os.system",
