@@ -1,0 +1,1 @@
+Yes. Method N4 (dev_metric=0.7603) beats baseline N3 (dev_metric=0.6041) by +0.1562 absolute, a ~25.9% relative improvement. With the comparability gate passed (same frozen data/split/protocol/seed), the gain is attributable to the method change.

@@ -1,0 +1,193 @@
+{
+  "version": "1.0",
+  "research_question": "Does gradient boosting beat a linear baseline on our noisy 7-feature tabular regression task?",
+  "protocol_version": "p1",
+  "resources": {
+    "gpu": 1,
+    "cpu": 3
+  },
+  "budget": {
+    "max_ticks": 800,
+    "token_cap": null
+  },
+  "nodes": [
+    {
+      "id": "N0",
+      "kind": "fast",
+      "resource": "cpu",
+      "seed": 0,
+      "role": "protocol",
+      "acceptance": [
+        "python",
+        "eval/selfcheck.py"
+      ]
+    },
+    {
+      "id": "N1",
+      "kind": "fast",
+      "resource": "cpu",
+      "seed": 0,
+      "role": "data"
+    },
+    {
+      "id": "N2",
+      "kind": "fast",
+      "resource": "cpu",
+      "seed": 0,
+      "role": "harness"
+    },
+    {
+      "id": "N3",
+      "kind": "fast",
+      "resource": "cpu",
+      "seed": 7,
+      "role": "eval",
+      "metric": "dev_metric",
+      "expected_score": 0.3521,
+      "acceptance": [
+        "python",
+        "eval/score.py",
+        "--who",
+        "baseline"
+      ]
+    },
+    {
+      "id": "N4",
+      "kind": "long",
+      "resource": "gpu",
+      "seed": 7,
+      "role": "train",
+      "metric": "dev_metric",
+      "acceptance": [
+        "python",
+        "eval/score.py",
+        "--who",
+        "method"
+      ],
+      "compute": {
+        "cmd": [
+          "python",
+          "scripts/sim_train.py",
+          "--profile",
+          "{profile}"
+        ],
+        "profile": "gbm_noisy7",
+        "steps": 100,
+        "ckpt_every_pct": 10,
+        "metrics_file": "metrics.jsonl",
+        "ckpt_dir": "ckpt"
+      }
+    },
+    {
+      "id": "N4e",
+      "kind": "reactive",
+      "resource": "cpu",
+      "seed": 7,
+      "role": "eval",
+      "metric": "dev_metric",
+      "triggers": [
+        {
+          "src": "N4",
+          "event": "ckpt"
+        }
+      ]
+    },
+    {
+      "id": "N5",
+      "kind": "reactive",
+      "resource": "cpu",
+      "seed": 0,
+      "role": "analysis",
+      "can_spawn": true,
+      "triggers": [
+        {
+          "src": "N3",
+          "event": "done"
+        },
+        {
+          "src": "N4e",
+          "event": "result"
+        }
+      ]
+    },
+    {
+      "id": "N6",
+      "kind": "reactive",
+      "resource": "cpu",
+      "seed": 0,
+      "role": "report",
+      "triggers": [
+        {
+          "src": "N5",
+          "event": "result"
+        }
+      ]
+    },
+    {
+      "id": "N7",
+      "kind": "fast",
+      "resource": "cpu",
+      "seed": 11,
+      "role": "ablation",
+      "spawn_only": true,
+      "spawned_by": "N5"
+    }
+  ],
+  "edges": [
+    {
+      "src": "N0",
+      "dst": "N1",
+      "kind": "artifact"
+    },
+    {
+      "src": "N1",
+      "dst": "N2",
+      "kind": "artifact"
+    },
+    {
+      "src": "N2",
+      "dst": "N3",
+      "kind": "artifact"
+    },
+    {
+      "src": "N2",
+      "dst": "N4",
+      "kind": "artifact"
+    },
+    {
+      "src": "N2",
+      "dst": "N4e",
+      "kind": "artifact"
+    },
+    {
+      "src": "N4",
+      "dst": "N4e",
+      "kind": "stream",
+      "event": "ckpt"
+    },
+    {
+      "src": "N3",
+      "dst": "N5",
+      "kind": "stream",
+      "event": "done"
+    },
+    {
+      "src": "N4e",
+      "dst": "N5",
+      "kind": "stream",
+      "event": "result"
+    },
+    {
+      "src": "N5",
+      "dst": "N6",
+      "kind": "stream",
+      "event": "result"
+    },
+    {
+      "src": "N5",
+      "dst": "N4",
+      "kind": "back_edge",
+      "max_laps": 3
+    }
+  ]
+}

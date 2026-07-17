@@ -33,14 +33,17 @@
   header .meta{font-size:13px;color:var(--ink)}
   header .meta b{color:var(--running)}
   #controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  #controls button{font:13px ui-monospace,monospace;color:var(--ink);background:#21262d;
-    border:1px solid var(--line);border-radius:7px;padding:7px 13px;cursor:pointer}
+  #controls button{font:13px ui-monospace,monospace;color:var(--ink);background:#21262d;    border:1px solid var(--line);border-radius:7px;padding:7px 13px;cursor:pointer}
   #controls button:hover:not(:disabled){border-color:var(--running)}
   #controls button:disabled{opacity:.4;cursor:not-allowed}
   #demoBtn{background:var(--verified);color:#0d1117;font-weight:700;border-color:var(--verified);
     font-size:14px;padding:7px 16px}
   #demoExtBtn{background:var(--stale);color:#0d1117;font-weight:700;border-color:var(--stale);
     font-size:14px;padding:7px 16px}
+  #controls input{font:13px ui-monospace,monospace;color:var(--ink);background:#0d1117;
+    border:1px solid var(--line);border-radius:7px;padding:7px 10px}
+  #controls input:disabled{opacity:.4}
+  #rBtn{background:var(--running);color:#0d1117;font-weight:700;border-color:var(--running)}
   #connbar{display:none;background:var(--killed);color:#fff;text-align:center;
     font-weight:700;padding:5px;font-size:13px}
   #connbar.show{display:block}
@@ -146,6 +149,9 @@
     <button class="sc" data-s="trap_taint">trap_taint</button>
     <button id="demoBtn">▶ DEMO</button>
     <button id="demoExtBtn">▶ DEMO+</button>
+    <input id="rq" type="text" placeholder="type a research question…" size="26"
+           title="one sentence in — planner + full-live run (M12)">
+    <button id="rBtn" title="plan + run it live">Run</button>
   </div>
   <div class="meta">tick <b id="tick">–</b> · report <b id="rv">–</b> · <span id="conn" class="disc">connecting…</span></div>
 </header>
@@ -396,6 +402,13 @@ async function post(url){try{const r=await fetch(url,{method:'POST'});
 document.querySelectorAll('.sc').forEach(b=>b.onclick=()=>post('/run?scenario='+b.dataset.s+'&tick_ms='+DEMO_TICK_MS));
 document.getElementById('demoBtn').onclick=()=>post('/demo');
 document.getElementById('demoExtBtn').onclick=()=>post('/demo?playlist=extended');
+document.getElementById('rBtn').onclick=()=>{
+  const v=document.getElementById('rq').value.trim();
+  if(v)post('/research?q='+encodeURIComponent(v));
+};
+document.getElementById('rq').onkeydown=(e)=>{
+  if(e.key==='Enter')document.getElementById('rBtn').onclick();
+};
 // replay control bar (pause/step/back/speed) — the Q&A "replay that" tool
 let curSpeed=1200;
 document.querySelectorAll('#rctl button').forEach(b=>b.onclick=()=>{
@@ -409,6 +422,8 @@ async function pollStatus(){
     const st=await (await fetch('/demo/status',{cache:'no-store'})).json();
     const busy=st.state&&st.state!=='idle';
     document.querySelectorAll('#controls button').forEach(b=>b.disabled=busy);
+    document.getElementById('rq').disabled=!!busy;
+    if(st.state!==window._lst){window._lst=st.state;if(st.state==='playing')loadQuestion();}
     const banner=document.getElementById('banner');
     if(st.state==='banner'||st.state==='preparing'){
       let head,sub;

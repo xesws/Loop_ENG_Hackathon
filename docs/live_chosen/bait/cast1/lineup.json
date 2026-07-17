@@ -1,0 +1,41 @@
+{
+  "N0": {
+    "role": "protocol",
+    "behavior": "scripted",
+    "actual": "scripted"
+  },
+  "N1": {
+    "role": "data",
+    "behavior": "scripted",
+    "actual": "scripted"
+  },
+  "N2": {
+    "role": "harness",
+    "behavior": "scripted",
+    "actual": "scripted"
+  },
+  "N3": {
+    "role": "eval",
+    "behavior": "baseline",
+    "actual": "live",
+    "steps": 4,
+    "cost": 0.001744
+  },
+  "N4": {
+    "role": "experiment_method",
+    "behavior": "method_manifest",
+    "actual": "live->worldstate-fallback"
+  },
+  "N5": {
+    "role": "analysis",
+    "behavior": "analysis",
+    "actual": "live",
+    "cost": 0.002109
+  },
+  "N6": {
+    "role": "report",
+    "behavior": "report_polish",
+    "actual": "live",
+    "cost": 0.003648
+  }
+}
