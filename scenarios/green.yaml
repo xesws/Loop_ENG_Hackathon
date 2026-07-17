@@ -1,0 +1,5 @@
+# Clean run: fine-tuned model (N4, rise_cross) crosses the 0.58 baseline ->
+# everything verified, positive result.
+name: green
+profile: rise_cross
+overrides: {}

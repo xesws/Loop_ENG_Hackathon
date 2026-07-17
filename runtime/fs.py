@@ -135,6 +135,21 @@ def latest_ckpt(ckpt_dir: Path) -> Path | None:
     return best
 
 
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def frozen_fields(repo_root: Path) -> dict[str, str]:
+    """The comparability three-tuple derived from the frozen data/eval contract.
+    (seed is per-node.) Same frozen files -> identical hashes across runs."""
+    repo_root = Path(repo_root)
+    return {
+        "data_hash": fingerprint(repo_root / "data"),
+        "split_hash": sha256_file(repo_root / "data" / "split.json"),
+        "protocol_version": sha256_file(repo_root / "eval" / "protocol.md"),
+    }
+
+
 def list_ckpts(ckpt_dir: Path) -> list[str]:
     """Sorted list of ckpt file names (by integer pct)."""
     ckpt_dir = Path(ckpt_dir)

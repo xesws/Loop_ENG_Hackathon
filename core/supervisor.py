@@ -156,7 +156,9 @@ class Supervisor:
                 d.best_dev = best_dev
                 d.best_ckpt = step
             d.plateau_patience = d.plateau_patience + 1 if improvement < PLATEAU_EPS else 0
-            if d.plateau_patience >= PLATEAU_PATIENCE:
+            # PLATEAU = not improving AND not good enough; a run that has already
+            # beaten the target is a success, not a plateau, and runs to completion.
+            if d.plateau_patience >= PLATEAU_PATIENCE and d.best_dev < self.target:
                 self._act("fuse", "PLATEAU_TRIP", nid,
                           {"best_dev": _f(d.best_dev), "best_ckpt": d.best_ckpt,
                            "target": self.target, "patience": d.plateau_patience,
@@ -254,6 +256,10 @@ class Supervisor:
             return {"answered": True, "node": nid, "best_dev": bd,
                     "line": f"RESEARCH ANSWERED: fine-tuned model beats baseline "
                             f"(best_dev={bd:.3f} >= {self.target})"}
+        if not self.comparability_ok:
+            return {"answered": False, "blocked": True,
+                    "line": "RESULT WITHHELD: method result is NOT comparable to the "
+                            "frozen baseline (COMPARABILITY_BLOCK) — baseline stands."}
         best_seen = max((n.best_dev for n in self.g.nodes.values()
                          if n.best_dev is not None), default=None)
         bd_str = f"{best_seen:.3f}" if best_seen is not None else "n/a"

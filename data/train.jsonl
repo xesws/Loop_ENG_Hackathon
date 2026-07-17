@@ -1,0 +1,6 @@
+{"q": "How many singers do we have?", "sql": "SELECT count(*) FROM singer"}
+{"q": "List all singer names.", "sql": "SELECT name FROM singer"}
+{"q": "What is the average age of singers?", "sql": "SELECT avg(age) FROM singer"}
+{"q": "Show names of singers older than 40.", "sql": "SELECT name FROM singer WHERE age > 40"}
+{"q": "Count concerts in 2020.", "sql": "SELECT count(*) FROM concert WHERE year = 2020"}
+{"q": "Which stadium hosted the most concerts?", "sql": "SELECT stadium_id FROM concert GROUP BY stadium_id ORDER BY count(*) DESC LIMIT 1"}

@@ -99,6 +99,7 @@ class Node:
     metric: str = "dev_metric"
     role: str = ""                        # "train" | "eval" | "analysis" | "report" | ""
     expected_score: Optional[float] = None
+    acceptance: Optional[list[str]] = None    # argv run at completion (exit 0 required)
     compute: Optional[ComputeSpec] = None
     triggers: list[Trigger] = field(default_factory=list)
     can_spawn: bool = False
@@ -206,6 +207,7 @@ def _node_from_dict(d: dict) -> Node:
         id=d["id"], kind=Kind(d["kind"]), resource=Resource(d["resource"]),
         seed=d.get("seed", 0), metric=d.get("metric", "dev_metric"),
         role=d.get("role", ""), expected_score=d.get("expected_score"),
+        acceptance=d.get("acceptance"),
         compute=compute, triggers=triggers, can_spawn=d.get("can_spawn", False),
         spawn_only=d.get("spawn_only", False), spawned_by=d.get("spawned_by"),
     )
