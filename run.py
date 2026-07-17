@@ -230,6 +230,8 @@ class DemoController:
         feed.start()
 
     def load_direct(self, path: Path, tick_ms: int = 500):
+        plan = Path(path).parent / "plan_live.json"   # replay shows its own question
+        self.plan_path = plan if plan.exists() else REPO / "graph" / "plan_cached.json"
         self._swap_feed(_ReplayFeed(path, adv_s=tick_ms / 1000.0))
         self.status.update(state="playing", scenario="(replay)", banner=None)
 
