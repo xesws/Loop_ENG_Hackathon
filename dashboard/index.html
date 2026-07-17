@@ -22,6 +22,19 @@
             overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   header .meta{font-size:13px;color:var(--ink)}
   header .meta b{color:var(--running)}
+  #controls{display:flex;gap:8px;align-items:center}
+  #controls button{font:13px ui-monospace,monospace;color:var(--ink);background:#21262d;
+    border:1px solid var(--line);border-radius:7px;padding:7px 13px;cursor:pointer}
+  #controls button:hover:not(:disabled){border-color:var(--running)}
+  #controls button:disabled{opacity:.4;cursor:not-allowed}
+  #demoBtn{background:var(--verified);color:#0d1117;font-weight:700;border-color:var(--verified);
+    font-size:14px;padding:7px 16px}
+  #banner{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(13,17,23,.93);z-index:10}
+  #banner.show{display:flex}
+  #bannerText{font-size:26px;font-weight:700;color:var(--ink);max-width:72%;text-align:center;
+    border-left:6px solid var(--running);padding:20px 30px;background:#161b22;border-radius:12px}
+  #bannerText small{display:block;color:var(--dim);font-size:14px;font-weight:400;margin-top:8px}
   #wrap{display:flex;height:calc(100vh - 50px)}
   #graph{flex:1;min-width:0}
   aside{width:320px;border-left:1px solid var(--line);background:var(--panel);
@@ -61,8 +74,17 @@
 <header>
   <h1>Graph Supervisor</h1>
   <div class="q" id="question">loading…</div>
+  <div id="controls">
+    <button class="sc" data-s="green">green</button>
+    <button class="sc" data-s="trap_b">trap_b</button>
+    <button class="sc" data-s="trap_scope">trap_scope</button>
+    <button class="sc" data-s="plateau">plateau</button>
+    <button class="sc" data-s="hung">hung</button>
+    <button id="demoBtn">▶ DEMO</button>
+  </div>
   <div class="meta">tick <b id="tick">–</b> · report <b id="rv">–</b> · <span id="conn" class="disc">connecting…</span></div>
 </header>
+<div id="banner"><div id="bannerText"></div></div>
 <div id="wrap">
   <svg id="graph" viewBox="0 0 1120 420" preserveAspectRatio="xMidYMid meet"></svg>
   <aside>
@@ -197,7 +219,35 @@ async function loadQuestion(){
     const g=await r.json();document.getElementById('question').textContent=g.research_question||'';}
   catch(e){document.getElementById('question').textContent='(research question unavailable)';}
 }
-legend();loadQuestion();poll();setInterval(poll,800);
+
+// ---- demo controls (buttons + hands-free playlist) ----
+const DEMO_TICK_MS=1200;
+async function post(url){
+  try{const r=await fetch(url,{method:'POST'});
+    if(r.status===409){const c=document.getElementById('conn');c.textContent='a run is active';c.className='disc';}}
+  catch(e){}
+}
+document.querySelectorAll('.sc').forEach(b=>b.onclick=()=>post('/run?scenario='+b.dataset.s+'&tick_ms='+DEMO_TICK_MS));
+document.getElementById('demoBtn').onclick=()=>post('/demo');
+
+async function pollStatus(){
+  try{
+    const st=await (await fetch('/demo/status',{cache:'no-store'})).json();
+    const busy=st.state&&st.state!=='idle';
+    document.querySelectorAll('#controls button').forEach(b=>b.disabled=busy);
+    const banner=document.getElementById('banner');
+    if((st.state==='banner'||st.state==='preparing')){
+      const txt=st.state==='banner'?(st.banner||''):('Preparing '+(st.scenario||'')+' …');
+      document.getElementById('bannerText').innerHTML=txt+(st.state==='banner'?'<small>next scene starting…</small>':'');
+      banner.classList.add('show');
+    }else banner.classList.remove('show');
+    if(busy){const c=document.getElementById('conn');
+      c.textContent=st.state+(st.scenario?(' · '+st.scenario):'');c.className='';}
+  }catch(e){}
+}
+
+legend();loadQuestion();poll();pollStatus();
+setInterval(()=>{poll();pollStatus();},800);
 </script>
 </body>
 </html>

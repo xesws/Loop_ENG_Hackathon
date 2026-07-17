@@ -1,0 +1,11 @@
+# ▶ DEMO auto-plays these scenes in order, hands-free. For each scene: show the
+# title banner ~2s, run the scenario, animate its replay at tick_ms per frame,
+# then advance. tick_ms is the demo pacing knob (reuses the replay feed interval);
+# 800-1200ms/frame makes the progress bar climb human-readable.
+scenes:
+  - title: "PLATEAU — early-kill a hopeless run, keep the negative result, spawn an ablation"
+    scenario: plateau
+    tick_ms: 1200
+  - title: "TRAP_SCOPE — intercept an out-of-scope write, revert it, blame the culprit"
+    scenario: trap_scope
+    tick_ms: 900

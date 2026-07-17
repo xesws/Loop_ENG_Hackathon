@@ -38,6 +38,21 @@ the five acceptance commands below are pasted **verbatim**.
   `127.0.0.1` via stdlib `http.server` (not a web framework). Verified in Chrome:
   zero console errors, all page requests localhost-only, animation identical in
   live and replay modes. Screenshot: `docs/dashboard.png`.
+- **M7 (demo mode)** — topbar scenario buttons `[green|trap_b|trap_scope|plateau|
+  hung]` (POST `/run?scenario=X&tick_ms=N`; 409 if a run is active) and a hands-free
+  **▶ DEMO** button (POST `/demo`) that plays `demo_playlist.yaml` (default
+  `[plateau@1200ms, trap_scope@900ms]`): title banner ~2s → run scenario → animate
+  its replay at tick_ms/frame → next, zero keyboard on stage. The pacing knob
+  `tick_ms` **reuses the existing replay-feed interval** (not a second system): a
+  scenario runs at normal speed to produce `replay.jsonl`, then the serve layer
+  animates it — 26 plateau frames × 1200ms ≈ **31s** with a frame-by-frame climb
+  and N4 turning red at the trip (a live-slowed orchestrator can't do this: the
+  trainer subprocess races ahead between slow polls and the plateau patience logic
+  needs one ckpt per tick). Verified in Chrome: ▶ DEMO plays plateau ≥30s → red +
+  N7 → trap_scope auto-follows; all five buttons work; **zero console errors, all
+  requests localhost-only**. Only `run.py`'s serve section + `dashboard/` +
+  `demo_playlist.yaml` were touched — core/, scenario logic, and the `state.json`
+  schema were not. Screenshot: `docs/dashboard_demo.png`.
 
 Every milestone was committed on `main` (`git log --oneline`: M0…M5).
 

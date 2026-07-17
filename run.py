@@ -12,9 +12,12 @@ import asyncio
 import glob
 import json
 import os
+import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from core.clock import TickClock
 from core.incidents import IncidentLog
@@ -74,9 +77,14 @@ def _print_summary(r: RunResult) -> None:
 
 
 # ------------------------------------------------------------------ --serve
+_EMPTY = b'{"ts":0,"nodes":[],"incidents":[],"report_version":0}'
+_SCENARIOS = ("green", "trap_b", "trap_scope", "plateau", "hung")
+
+
 class _ReplayFeed:
-    """Steps through a replay.jsonl at ~2Hz and synthesizes a state.json frame
-    per tick (nodes snapshot + accumulated incidents). Holds the last frame."""
+    """Steps through a replay.jsonl at `adv_s` per frame and synthesizes a
+    state.json frame per tick (nodes snapshot + accumulated incidents). Holds the
+    last frame. adv_s is the demo pacing knob (reused for --tick-ms)."""
     def __init__(self, path: Path, adv_s: float = 0.5):
         self.lines = [json.loads(ln) for ln in Path(path).read_text().splitlines()
                       if ln.strip()]
@@ -84,17 +92,19 @@ class _ReplayFeed:
         self.idx = 0
 
     def start(self):
-        import threading
-
         def loop():
             while self.idx < len(self.lines) - 1:
                 time.sleep(self.adv_s)
                 self.idx += 1
         threading.Thread(target=loop, daemon=True).start()
 
+    @property
+    def done(self) -> bool:
+        return not self.lines or self.idx >= len(self.lines) - 1
+
     def frame_bytes(self) -> bytes:
         if not self.lines:
-            return b'{"ts":0,"nodes":[],"incidents":[],"report_version":0}'
+            return _EMPTY
         i = min(self.idx, len(self.lines) - 1)
         rec = self.lines[i]
         incs = []
@@ -105,7 +115,82 @@ class _ReplayFeed:
         return json.dumps(frame).encode()
 
 
-_EMPTY = b'{"ts":0,"nodes":[],"incidents":[],"report_version":0}'
+def _load_playlist() -> list[dict]:
+    default = [
+        {"title": "PLATEAU — early-kill a hopeless run, keep the negative result",
+         "scenario": "plateau", "tick_ms": 1200},
+        {"title": "TRAP_SCOPE — intercept an out-of-scope write, blame the culprit",
+         "scenario": "trap_scope", "tick_ms": 900},
+    ]
+    p = REPO / "demo_playlist.yaml"
+    if not p.exists():
+        return default
+    try:
+        import yaml
+        scenes = (yaml.safe_load(p.read_text(encoding="utf-8")) or {}).get("scenes")
+        return scenes or default
+    except Exception:
+        return default
+
+
+class DemoController:
+    """Runs a scenario at normal speed to produce replay.jsonl, then animates that
+    replay at tick_ms/frame. Drives the hands-free playlist. Never touches the
+    orchestrator/scenario logic — pure playback over recorded ticks."""
+    def __init__(self):
+        self.feed: _ReplayFeed | None = None
+        self.status = {"state": "idle", "scenario": None, "banner": None,
+                       "playlist": [], "idx": 0, "tick_ms": 1200}
+
+    def busy(self) -> bool:
+        return self.status["state"] in ("preparing", "playing", "banner")
+
+    def frame_bytes(self) -> bytes:
+        return self.feed.frame_bytes() if self.feed else _EMPTY
+
+    def load_direct(self, path: Path, tick_ms: int = 500):
+        self.feed = _ReplayFeed(path, adv_s=tick_ms / 1000.0)
+        self.feed.start()
+        self.status.update(state="playing", scenario="(replay)", banner=None)
+
+    def _play_scenario(self, scenario: str, tick_ms: int):
+        self.status.update(state="preparing", scenario=scenario, banner=None,
+                           tick_ms=tick_ms)
+        try:
+            subprocess.run([sys.executable, str(REPO / "run.py"), "--mock",
+                            "--scenario", scenario], cwd=str(REPO),
+                           capture_output=True, text=True, timeout=120)
+        except Exception:
+            self.status.update(state="idle")
+            return
+        files = glob.glob(str(REPO / "runs" / f"*-{scenario}" / "replay.jsonl"))
+        if not files:
+            self.status.update(state="idle")
+            return
+        self.feed = _ReplayFeed(Path(max(files, key=os.path.getmtime)),
+                                adv_s=tick_ms / 1000.0)
+        self.feed.start()
+        self.status.update(state="playing")
+        while not self.feed.done:
+            time.sleep(0.1)
+        time.sleep(2.5)                       # hold the final frame
+
+    def run_one(self, scenario: str, tick_ms: int):
+        def worker():
+            self._play_scenario(scenario, tick_ms)
+            self.status.update(state="idle", banner=None)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def run_playlist(self, scenes: list[dict]):
+        def worker():
+            self.status["playlist"] = [s.get("title", s["scenario"]) for s in scenes]
+            for i, sc in enumerate(scenes):
+                self.status.update(idx=i, state="banner",
+                                   banner=sc.get("title", sc["scenario"]))
+                time.sleep(2.0)               # inter-scene title banner
+                self._play_scenario(sc["scenario"], int(sc.get("tick_ms", 1200)))
+            self.status.update(state="idle", banner=None)
+        threading.Thread(target=worker, daemon=True).start()
 
 
 def serve(port: int, replay_file: str | None) -> int:
@@ -114,39 +199,54 @@ def serve(port: int, replay_file: str | None) -> int:
 
     dash = REPO / "dashboard" / "index.html"
     plan = REPO / "graph" / "plan_cached.json"
-    feed = None
+    ctl = DemoController()
     if replay_file:
-        feed = _ReplayFeed(Path(replay_file))
-        feed.start()
-
-    def state_bytes() -> bytes:
-        if feed:
-            return feed.frame_bytes()
-        files = glob.glob(str(REPO / "runs" / "*" / "state.json"))
-        if not files:
-            return _EMPTY
-        try:
-            return Path(max(files, key=os.path.getmtime)).read_bytes()
-        except OSError:
-            return _EMPTY
+        ctl.load_direct(Path(replay_file))
 
     class Handler(http.server.BaseHTTPRequestHandler):
-        def _send(self, body: bytes, ctype: str):
-            self.send_response(200)
+        def _send(self, body: bytes, ctype: str, code: int = 200):
+            self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
+        def _json(self, obj, code: int = 200):
+            self._send(json.dumps(obj).encode(), "application/json", code)
+
         def do_GET(self):
             path = self.path.split("?")[0]
             if path in ("/", "/index.html"):
                 self._send(dash.read_bytes(), "text/html; charset=utf-8")
             elif path == "/state.json":
-                self._send(state_bytes(), "application/json")
+                self._send(ctl.frame_bytes(), "application/json")
             elif path == "/plan_cached.json":
                 self._send(plan.read_bytes(), "application/json")
+            elif path == "/demo/status":
+                self._json(ctl.status)
+            else:
+                self.send_error(404)
+
+        def do_POST(self):
+            u = urlparse(self.path)
+            q = parse_qs(u.query)
+            if u.path == "/run":
+                scenario = (q.get("scenario") or [""])[0]
+                tick_ms = int((q.get("tick_ms") or ["1200"])[0])
+                if scenario not in _SCENARIOS:
+                    self._json({"error": f"bad scenario {scenario}"}, 400)
+                elif ctl.busy():
+                    self._json({"error": "a run is already active"}, 409)
+                else:
+                    ctl.run_one(scenario, tick_ms)
+                    self._json({"ok": True, "scenario": scenario})
+            elif u.path == "/demo":
+                if ctl.busy():
+                    self._json({"error": "a run is already active"}, 409)
+                else:
+                    ctl.run_playlist(_load_playlist())
+                    self._json({"ok": True})
             else:
                 self.send_error(404)
 
@@ -158,7 +258,7 @@ def serve(port: int, replay_file: str | None) -> int:
         daemon_threads = True
 
     httpd = Server(("127.0.0.1", port), Handler)
-    mode = f"replay {replay_file}" if replay_file else "live (follows newest runs/*/state.json)"
+    mode = f"replay {replay_file}" if replay_file else "demo mode (buttons + ▶ DEMO)"
     print(f"dashboard: http://127.0.0.1:{port}/   [{mode}]  (Ctrl-C to stop)")
     try:
         httpd.serve_forever()
