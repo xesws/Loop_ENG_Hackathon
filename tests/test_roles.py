@@ -58,6 +58,68 @@ def test_baseline_and_method_resolution():
     assert roles.method_node(g) == "N4"
 
 
+def test_parallel_free_stations_marker_and_topo():
+    """Parallel experiments under harness: marked baseline + unmarked method;
+    or two unmarked roots → first topo baseline, rest method."""
+    Edge, EdgeKind = schema.Edge, schema.EdgeKind
+    Kind, Node, Resource = schema.Kind, schema.Node, schema.Resource
+
+    def _mini(nodes, edges):
+        g = schema.Graph(
+            nodes={n.id: n for n in nodes},
+            edges=edges,
+            resources={"gpu": 1, "cpu": 4},
+            budget=schema.Budget(max_ticks=100),
+            protocol_version="t",
+            research_question="q",
+        )
+        return normalizer.normalize(g)
+
+    proto = Node(id="P", kind=Kind.FAST, resource=Resource.CPU, seed=1, role="protocol")
+    harness = Node(id="H", kind=Kind.FAST, resource=Resource.CPU, seed=1, role="harness")
+    base = Node(id="B", kind=Kind.FAST, resource=Resource.CPU, seed=7, role="experiment",
+                expected_score=0.6)
+    meth = Node(id="M", kind=Kind.FAST, resource=Resource.CPU, seed=8, role="experiment")
+    g = _mini([proto, harness, base, meth], [
+        Edge("P", "H", EdgeKind.ARTIFACT),
+        Edge("H", "B", EdgeKind.ARTIFACT),
+        Edge("H", "M", EdgeKind.ARTIFACT),
+    ])
+    assert roles.experiment_station(g, "B") == "baseline"
+    assert roles.experiment_station(g, "M") == "method"
+    assert roles.baseline_node(g) == "B"
+    assert roles.method_nodes(g) == ["M"]
+
+    a = Node(id="A1", kind=Kind.FAST, resource=Resource.CPU, seed=1, role="experiment")
+    b = Node(id="A2", kind=Kind.FAST, resource=Resource.CPU, seed=2, role="experiment")
+    g2 = _mini([proto, harness, a, b], [
+        Edge("P", "H", EdgeKind.ARTIFACT),
+        Edge("H", "A1", EdgeKind.ARTIFACT),
+        Edge("H", "A2", EdgeKind.ARTIFACT),
+    ])
+    assert roles.experiment_station(g2, "A1") == "baseline"
+    assert roles.experiment_station(g2, "A2") == "method"
+
+
+def test_validate_roles_cached_ok_and_rejects_incomplete():
+    g = _plan()
+    assert planner.validate_roles(g) == []
+
+    # Drop harness role → experiments lose harness upstream.
+    g2 = _plan()
+    g2.nodes["N2"].role = "data"
+    errs = planner.validate_roles(g2)
+    assert any("harness" in e for e in errs)
+
+    # Analysis with only one experiment ancestor fails.
+    g3 = _plan()
+    # Remove N3→N5 path by demoting N3 out of experiment set
+    g3.nodes["N3"].role = "harness"
+    g3.nodes["N3"].expected_score = None
+    errs3 = planner.validate_roles(g3)
+    assert any("analysis" in e for e in errs3)
+
+
 # ------------------------------------------------------------------ briefs
 def test_baseline_brief_contract():
     g = _plan()
@@ -120,7 +182,7 @@ def test_planner_retry_success_first_attempt(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     calls = []
 
-    def fake(question, template, model, key, timeout=60, feedback=None):
+    def fake(question, template, model, key, timeout=60, feedback=None, **kw):
         calls.append(feedback)
         return _valid_plan_json(), 0.001
 
@@ -134,7 +196,7 @@ def test_planner_retry_carries_error_feedback(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     seen = []
 
-    def fake(question, template, model, key, timeout=60, feedback=None):
+    def fake(question, template, model, key, timeout=60, feedback=None, **kw):
         seen.append(feedback)
         if len(seen) == 1:
             return "not json at all", 0.001
@@ -170,6 +232,21 @@ def test_planner_strikes_out_to_cached(monkeypatch, tmp_path):
     assert r["valid"] and r["source"] == "fallback_cached"
     plan = json.loads(Path(r["out"]).read_text(encoding="utf-8"))
     assert "nodes" in plan and "edges" in plan
+
+
+def test_planner_free_retry_checks_roles(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    calls = []
+
+    def fake(question, template, model, key, timeout=60, feedback=None, **kw):
+        calls.append(kw.get("free"))
+        return _valid_plan_json(), 0.001
+
+    monkeypatch.setattr(planner, "_call_llm", fake)
+    r = planner.generate_plan_retry("q?", tmp_path, REPO / "graph" / "plan_cached.json",
+                                    free=True)
+    assert r["valid"] and r["free"] is True and r["source"] == "live"
+    assert calls == [True]
 
 
 if __name__ == "__main__":
