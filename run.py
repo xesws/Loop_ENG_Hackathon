@@ -90,22 +90,61 @@ _SCENARIOS = ("green", "trap_b", "trap_scope", "plateau", "hung",
               "trap_stale", "trap_taint")
 
 
+_KEY_INCIDENTS = {"PLATEAU_TRIP", "SCOPE_VIOLATION", "COMPARABILITY_BLOCK"}
+
+
 class _ReplayFeed:
     """Steps through a replay.jsonl at `adv_s` per frame and synthesizes a
-    state.json frame per tick (nodes snapshot + accumulated incidents). Holds the
-    last frame. adv_s is the demo pacing knob (reused for --tick-ms)."""
+    state.json frame per tick. Controllable: pause/step/back/speed, and it
+    auto-freezes ~2s when it lands on a key-incident frame so the money moment
+    lands on stage. The loop stays alive (so step-back after the end still works)."""
     def __init__(self, path: Path, adv_s: float = 0.5):
         self.lines = [json.loads(ln) for ln in Path(path).read_text().splitlines()
                       if ln.strip()]
-        self.adv_s = adv_s
+        self.adv_s = max(0.05, adv_s)
         self.idx = 0
+        self.paused = False
+        self._auto_hold = 0.0
+        self._stop = False
+
+    def _is_key(self, i) -> bool:
+        if not (0 <= i < len(self.lines)):
+            return False
+        return any(inc.get("type") in _KEY_INCIDENTS
+                   for inc in self.lines[i].get("incidents", []))
 
     def start(self):
         def loop():
-            while self.idx < len(self.lines) - 1:
-                time.sleep(self.adv_s)
-                self.idx += 1
+            acc = 0.0
+            while not self._stop:
+                time.sleep(0.05)
+                if self._auto_hold > 0:
+                    self._auto_hold -= 0.05
+                    continue
+                if self.paused or self.idx >= len(self.lines) - 1:
+                    continue
+                acc += 0.05
+                if acc >= self.adv_s:
+                    acc = 0.0
+                    self.idx += 1
+                    if self._is_key(self.idx):
+                        self._auto_hold = 2.0        # key-moment freeze
         threading.Thread(target=loop, daemon=True).start()
+
+    def stop(self):
+        self._stop = True
+
+    def toggle_pause(self) -> bool:
+        self.paused = not self.paused
+        return self.paused
+
+    def step(self, delta: int):
+        self.paused = True
+        self._auto_hold = 0.0
+        self.idx = max(0, min(len(self.lines) - 1, self.idx + delta))
+
+    def set_speed(self, ms: int):
+        self.adv_s = max(0.05, ms / 1000.0)
 
     @property
     def done(self) -> bool:
@@ -158,9 +197,35 @@ class DemoController:
     def frame_bytes(self) -> bytes:
         return self.feed.frame_bytes() if self.feed else _EMPTY
 
+    def status_snapshot(self) -> dict:
+        s = dict(self.status)
+        f = self.feed
+        s["replay"] = {"paused": bool(f and f.paused), "idx": (f.idx if f else 0),
+                       "len": (len(f.lines) if f else 0)}
+        return s
+
+    def ctl(self, op: str, ms: int = 1000):
+        if not self.feed:
+            return
+        if op == "pause":
+            self.feed.toggle_pause()
+        elif op == "step":
+            self.feed.step(1)
+        elif op == "back":
+            self.feed.step(-1)
+        elif op == "resume":
+            self.feed.paused = False
+        elif op == "speed":
+            self.feed.set_speed(ms)
+
+    def _swap_feed(self, feed):
+        if self.feed:
+            self.feed.stop()
+        self.feed = feed
+        feed.start()
+
     def load_direct(self, path: Path, tick_ms: int = 500):
-        self.feed = _ReplayFeed(path, adv_s=tick_ms / 1000.0)
-        self.feed.start()
+        self._swap_feed(_ReplayFeed(path, adv_s=tick_ms / 1000.0))
         self.status.update(state="playing", scenario="(replay)", banner=None)
 
     def _play_scenario(self, scenario: str, tick_ms: int):
@@ -177,9 +242,8 @@ class DemoController:
         if not files:
             self.status.update(state="idle")
             return
-        self.feed = _ReplayFeed(Path(max(files, key=os.path.getmtime)),
-                                adv_s=tick_ms / 1000.0)
-        self.feed.start()
+        self._swap_feed(_ReplayFeed(Path(max(files, key=os.path.getmtime)),
+                                    adv_s=tick_ms / 1000.0))
         self.status.update(state="playing")
         while not self.feed.done:
             time.sleep(0.1)
@@ -234,7 +298,7 @@ def serve(port: int, replay_file: str | None) -> int:
             elif path == "/plan_cached.json":
                 self._send(plan.read_bytes(), "application/json")
             elif path == "/demo/status":
-                self._json(ctl.status)
+                self._json(ctl.status_snapshot())
             else:
                 self.send_error(404)
 
@@ -258,6 +322,11 @@ def serve(port: int, replay_file: str | None) -> int:
                     pl = (q.get("playlist") or ["default"])[0]
                     ctl.run_playlist(_load_playlist(pl))
                     self._json({"ok": True, "playlist": pl})
+            elif u.path == "/demo/ctl":
+                op = (q.get("op") or [""])[0]
+                ms = int((q.get("ms") or ["1000"])[0])
+                ctl.ctl(op, ms)
+                self._json({"ok": True, "op": op})
             else:
                 self.send_error(404)
 

@@ -61,6 +61,13 @@
     color:#0d1117;background:var(--dim);white-space:nowrap}
   html.stage #narration .tag{font-size:14px;padding:5px 11px}
   #narration .txt{color:var(--ink)}
+  #rctl{margin-left:auto;display:none;gap:5px;align-items:center}
+  #rctl.show{display:flex}
+  #rctl button{font-size:15px;background:#21262d;color:var(--ink);border:1px solid var(--line);
+    border-radius:6px;padding:4px 10px;cursor:pointer;line-height:1}
+  #rctl button:hover{border-color:var(--running)}
+  html.stage #rctl button{font-size:20px;padding:6px 12px}
+  .inc.key{box-shadow:0 0 0 1px rgba(248,81,73,.30),0 0 14px rgba(248,81,73,.18)}
   aside{width:340px;border-left:1px solid var(--line);background:var(--panel);
         display:flex;flex-direction:column}
   html.stage aside{width:400px}
@@ -138,7 +145,14 @@
   <div id="graphwrap">
     <svg id="graph" viewBox="0 0 1120 430" preserveAspectRatio="xMidYMid meet"></svg>
     <div id="hovercard"></div>
-    <div id="narration"><span class="tag" id="narrtag">READY</span><span class="txt" id="narrtxt">Waiting for a run…</span></div>
+    <div id="narration"><span class="tag" id="narrtag">READY</span><span class="txt" id="narrtxt">Waiting for a run…</span>
+      <span id="rctl">
+        <button data-op="back" title="step back — 'replay that'">⏮</button>
+        <button id="pauseBtn" data-op="pause" title="pause / resume">⏸</button>
+        <button data-op="step" title="step forward">⏭</button>
+        <button data-op="slower" title="slower">🐢</button>
+        <button data-op="faster" title="faster">🐇</button>
+      </span></div>
   </div>
   <aside>
     <h2>Incident stream (newest first)</h2>
@@ -184,7 +198,8 @@ const STAGE = new URLSearchParams(location.search).get('stage')==='1';
 if(STAGE) document.documentElement.classList.add('stage');
 const NS = STAGE?1.22:1;                 // node-size scale in stage mode
 const svg=document.getElementById('graph');
-let lastState=null, lastIncCount=0, seenNodes=new Set(), flashCounters={};
+const KEY=new Set(['PLATEAU_TRIP','SCOPE_VIOLATION','COMPARABILITY_BLOCK']);
+let lastState=null, lastIncCount=0, seenNodes=new Set(), flashCounters={}, focusCounters={};
 
 function el(t,a={}){const e=document.createElementNS(SVG,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
 function fmt(x){return (x==null)?'–':(+x).toFixed(3);}
@@ -325,12 +340,13 @@ async function poll(){
     document.getElementById('tick').textContent=s.ts;
     document.getElementById('rv').textContent='v'+s.report_version;
     const fresh=(s.incidents||[]).slice(lastIncCount);
-    if(fresh.length){for(const i of fresh)flashCounters[i.node]=5;
+    if(fresh.length){for(const i of fresh){flashCounters[i.node]=5; if(KEY.has(i.type))focusCounters[i.node]=3;}
       const i=fresh[fresh.length-1];setNarr(i.type,sayIncident(i),RUNG[i.ladder_action]);narrHold=6;}
     lastIncCount=(s.incidents||[]).length;
-    const flash=new Set();
+    const flash=new Set(),focus=new Set();
     for(const k in flashCounters){if(flashCounters[k]>0){flash.add(k);flashCounters[k]--;}}
-    render(s,flash);
+    for(const k in focusCounters){if(focusCounters[k]>0){focus.add(k);focusCounters[k]--;}}
+    render(s,flash,focus);
     renderIncidents(s.incidents||[]);
     if(narrHold>0)narrHold--; else setNarr('SUPERVISOR',describeState(s),'var(--running)');
   }catch(e){
@@ -341,7 +357,7 @@ async function poll(){
 function renderIncidents(incs){
   const box=document.getElementById('incidents');box.innerHTML='';
   for(const i of incs.slice(-10).reverse()){
-    const d=document.createElement('div');d.className='inc';
+    const d=document.createElement('div');d.className='inc'+(KEY.has(i.type)?' key':'');
     const col=RUNG[i.ladder_action]||'#8b949e';d.style.borderLeftColor=col;
     const ev=Object.entries(i.evidence||{}).slice(0,3)
       .map(([k,v])=>`${k}=${typeof v==='object'?JSON.stringify(v):v}`).join(' · ');
@@ -364,6 +380,14 @@ async function post(url){try{const r=await fetch(url,{method:'POST'});
 document.querySelectorAll('.sc').forEach(b=>b.onclick=()=>post('/run?scenario='+b.dataset.s+'&tick_ms='+DEMO_TICK_MS));
 document.getElementById('demoBtn').onclick=()=>post('/demo');
 document.getElementById('demoExtBtn').onclick=()=>post('/demo?playlist=extended');
+// replay control bar (pause/step/back/speed) — the Q&A "replay that" tool
+let curSpeed=1200;
+document.querySelectorAll('#rctl button').forEach(b=>b.onclick=()=>{
+  const op=b.dataset.op;
+  if(op==='slower'){curSpeed=Math.min(2600,curSpeed+300);post('/demo/ctl?op=speed&ms='+curSpeed);}
+  else if(op==='faster'){curSpeed=Math.max(200,curSpeed-300);post('/demo/ctl?op=speed&ms='+curSpeed);}
+  else post('/demo/ctl?op='+op);
+});
 async function pollStatus(){
   try{
     const st=await (await fetch('/demo/status',{cache:'no-store'})).json();
@@ -371,11 +395,17 @@ async function pollStatus(){
     document.querySelectorAll('#controls button').forEach(b=>b.disabled=busy);
     const banner=document.getElementById('banner');
     if(st.state==='banner'||st.state==='preparing'){
-      const txt=st.state==='banner'?(st.banner||''):('Preparing '+(st.scenario||'')+' …');
-      document.getElementById('bannerText').innerHTML=txt+(st.state==='banner'?'<small>next scene starting…</small>':'');
+      let head,sub;
+      if(st.state==='banner'){const p=(st.banner||'').split(' — ');head=p[0];sub=p.slice(1).join(' — ')||'next scene starting…';}
+      else{head='Preparing '+(st.scenario||'')+' …';sub='';}
+      document.getElementById('bannerText').innerHTML=head+(sub?'<small>'+sub+'</small>':'');
       banner.classList.add('show');
     }else banner.classList.remove('show');
-    if(busy){const c=document.getElementById('conn');c.textContent=st.state+(st.scenario?(' · '+st.scenario):'');c.className='';}
+    // replay control bar: visible whenever a feed exists
+    const rc=st.replay||{}; const rctl=document.getElementById('rctl');
+    if(rc.len>0)rctl.classList.add('show'); else rctl.classList.remove('show');
+    document.getElementById('pauseBtn').textContent=rc.paused?'▶':'⏸';
+    if(busy){const c=document.getElementById('conn');c.textContent=st.state+(st.scenario?(' · '+st.scenario):'')+(rc.paused?' · paused':'');c.className='';}
   }catch(e){}
 }
 legend();loadQuestion();poll();pollStatus();
