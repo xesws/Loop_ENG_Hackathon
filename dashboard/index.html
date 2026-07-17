@@ -113,6 +113,13 @@
   @keyframes grow{from{opacity:0;transform:scale(.2)}to{opacity:1;transform:scale(1)}}
   .bar-bg{fill:#21262d}.bar-base{stroke:#f0f6fc;stroke-width:1.5}
   .disc{color:var(--stale)}
+  /* window-scaling adaptation */
+  @media (max-width:1200px){ aside{width:300px} html.stage aside{width:340px} }
+  @media (max-width:860px){
+    #wrap{flex-direction:column;height:auto;min-height:calc(100vh - 46px)}
+    #graphwrap{min-height:58vh}
+    aside{width:auto;border-left:none;border-top:1px solid var(--line);max-height:42vh}
+  }
   #hovercard{position:absolute;z-index:15;display:none;max-width:300px;pointer-events:none;
     background:#0d1117;border:1px solid var(--line);border-left:4px solid var(--running);
     border-radius:9px;padding:10px 12px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
@@ -199,7 +206,7 @@ if(STAGE) document.documentElement.classList.add('stage');
 const NS = STAGE?1.22:1;                 // node-size scale in stage mode
 const svg=document.getElementById('graph');
 const KEY=new Set(['PLATEAU_TRIP','SCOPE_VIOLATION','COMPARABILITY_BLOCK']);
-let lastState=null, lastIncCount=0, seenNodes=new Set(), flashCounters={}, focusCounters={};
+let lastState=null, lastIncCount=0, seenNodes=new Set(), flashCounters={}, focusCounters={}, booted=false;
 
 function el(t,a={}){const e=document.createElementNS(SVG,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
 function fmt(x){return (x==null)?'–':(+x).toFixed(3);}
@@ -339,13 +346,16 @@ async function poll(){
     document.getElementById('connbar').classList.remove('show');
     document.getElementById('tick').textContent=s.ts;
     document.getElementById('rv').textContent='v'+s.report_version;
+    // clean state-recovery after a refresh: adopt the current incident count once,
+    // without replaying every historical incident's flash/narration.
+    if(!booted){lastIncCount=(s.incidents||[]).length;booted=true;}
     const fresh=(s.incidents||[]).slice(lastIncCount);
     if(fresh.length){for(const i of fresh){flashCounters[i.node]=5; if(KEY.has(i.type))focusCounters[i.node]=3;}
       const i=fresh[fresh.length-1];setNarr(i.type,sayIncident(i),RUNG[i.ladder_action]);narrHold=6;}
     lastIncCount=(s.incidents||[]).length;
     const flash=new Set(),focus=new Set();
-    for(const k in flashCounters){if(flashCounters[k]>0){flash.add(k);flashCounters[k]--;}}
-    for(const k in focusCounters){if(focusCounters[k]>0){focus.add(k);focusCounters[k]--;}}
+    for(const k in flashCounters){if(flashCounters[k]>0){flash.add(k);flashCounters[k]--;}else delete flashCounters[k];}
+    for(const k in focusCounters){if(focusCounters[k]>0){focus.add(k);focusCounters[k]--;}else delete focusCounters[k];}
     render(s,flash,focus);
     renderIncidents(s.incidents||[]);
     if(narrHold>0)narrHold--; else setNarr('SUPERVISOR',describeState(s),'var(--running)');
