@@ -25,7 +25,19 @@ cheap default model.
   fallback to cached on any failure (no key / network / parse / invalid). Verified:
   real generation valid=true, **cost $0.0007**; `--mock green --plan-file <live>`
   runs green; no-key → fallback_cached. Running live spend ≈ **$0.0007 / $15**.
-- **T3 M8a live worker** — pending.
+- **T3 M8a live worker** — DONE. mini-swe-agent not installed → used the workbook's
+  blessed fallback: `runtime/real_worker.py::LiveAgentWorker`, a compact bash-loop
+  agent over OpenRouter with a safety sandbox (allowlisted command names +
+  content-denylist + per-command timeout + cwd pinned + max_steps≤15). The
+  `RealWorker` stub in `worker.py` is left untouched so its unit test stays green.
+  * Stage 1 `--live --node N3`: a real agent inspects `data/`, computes a baseline,
+    and emits a manifest that PASSES the real acceptance gate (3 steps, ~$0.0003).
+  * Stage 2 `--live` (full graph): N3 driven by the real agent, rest mock /
+    sim_train; exit 0, N3 manifest `code_sha=live-agent` flows through the
+    comparability gate to RESEARCH ANSWERED; incidents/state.json/dashboard flow.
+  `eval/make_manifest.py` lets a live agent stamp the frozen four-tuple so its
+  manifest stays comparable. Live spend so far ≈ **$0.0017 / $15**, 3 agent runs.
+  Regression after T3: pytest 45 + 7 scenarios exit 0.
 - **T4 M8b live decoys** — pending (only if T3 DONE).
 - **T5 M9c pitch package** — pending.
 - **T6 regression + merge + report** — pending.

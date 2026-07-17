@@ -43,6 +43,8 @@ def parse_args():
                    help="live planner: one LLM call -> validated plan_live.json")
     p.add_argument("--plan-file", metavar="FILE",
                    help="use this graph JSON for --mock instead of plan_cached.json")
+    p.add_argument("--node", metavar="ID",
+                   help="--live single node (e.g. N3): drive a real agent for it")
     p.add_argument("--scenario",
                    choices=["green", "trap_b", "plateau", "hung", "trap_scope",
                             "trap_stale", "trap_taint"])
@@ -291,6 +293,100 @@ def _run_planner(question: str) -> int:
     return 0 if result["valid"] else 1
 
 
+def _live_task(node_id: str) -> str:
+    return (
+        f"You are node {node_id} of an auto-research pipeline, working in your "
+        f"sandbox directory (your cwd). The repo root is {REPO}.\n"
+        f"Read-only inputs: {REPO}/data/train.jsonl (6 text-to-SQL rows) and "
+        f"{REPO}/data/split.json (dev split = rows [4,5]).\n"
+        "Goal: establish a BASELINE dev_metric (execution accuracy) for a few-shot "
+        "large-model baseline on the dev split, then emit results.json in your cwd.\n"
+        "Emit the manifest (with the correct frozen hashes) by running:\n"
+        f"  python {REPO}/eval/make_manifest.py --node {node_id} --score <SCORE> --out results.json\n"
+        "A reasonable few-shot baseline on this subset scores about 0.58. Inspect the "
+        "data, choose a score in [0,1], run make_manifest, then reply DONE.\n"
+        "Use ABSOLUTE paths for repo files. Allowed commands: ls, cat, head, python, echo."
+    )
+
+
+def _manifest_ok(path: Path) -> bool:
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return (isinstance(d.get("score"), (int, float)) and 0.0 <= d["score"] <= 1.0
+            and all(k in d for k in ("data_hash", "split_hash", "protocol_version", "seed")))
+
+
+def _run_live_node(node_id: str) -> int:
+    from core.gates import acceptance_gate
+    from runtime.real_worker import LiveAgentWorker
+    ts = time.strftime("%Y%m%d-%H%M%S") + "-live-" + node_id
+    run_dir = REPO / "runs" / ts
+    scope = run_dir / node_id
+    scope.mkdir(parents=True, exist_ok=True)
+    try:
+        worker = LiveAgentWorker(max_steps=15)
+    except RuntimeError as e:
+        print(f"live worker unavailable: {e}")
+        return 1
+    res = worker.run_node(_live_task(node_id), scope, lambda: _manifest_ok(scope / "results.json"))
+    accept = {"N3": ["python", "eval/score.py", "--who", "baseline"],
+              "N4": ["python", "eval/score.py", "--who", "method"]}.get(
+                  node_id, ["python", "eval/selfcheck.py"])
+    gr = acceptance_gate(accept, cwd=REPO, env_extra={"NODE_DIR": str(scope)})
+    print(f"\n=== LIVE {node_id} (model={res['model']}) ===")
+    for t in res["transcript"]:
+        print(f"  [{t['step']}] $ {t['cmd']}")
+    print(f"steps={res['steps']}  cost=${res['cost']}  manifest_ok={res['done']}  "
+          f"acceptance={'PASS' if gr.ok else 'FAIL'}")
+    print(f"run_dir: {run_dir}")
+    return 0 if (res["done"] and gr.ok) else 1
+
+
+class _HybridWorker:
+    """Full-graph live: drive a real agent for `live_nodes`, mock the rest.
+    Falls back to the mock worker if the live agent is unavailable/fails."""
+    def __init__(self, mock, live_nodes):
+        self.mock = mock
+        self.live_nodes = set(live_nodes)
+
+    def run_fast(self, node, scope_dir):
+        if node.id not in self.live_nodes:
+            return self.mock.run_fast(node, scope_dir)
+        from runtime.fs import read_manifest
+        from runtime.real_worker import LiveAgentWorker
+        from runtime.worker import NodeResult
+        sp = Path(scope_dir)
+        sp.mkdir(parents=True, exist_ok=True)
+        try:
+            LiveAgentWorker(max_steps=15).run_node(
+                _live_task(node.id), sp, lambda: _manifest_ok(sp / "results.json"))
+        except Exception as e:
+            print(f"[live {node.id}] unavailable ({e}); mock fallback", file=sys.stderr)
+            return self.mock.run_fast(node, sp)
+        man = read_manifest(sp / "results.json") if _manifest_ok(sp / "results.json") else None
+        return NodeResult(node=node.id, artifacts=["results.json"], manifest=man,
+                          events=["done"], duration_ticks=2)
+
+
+async def run_live_full(live_nodes=("N3",)) -> RunResult:
+    g = load_graph()
+    scenario = load_scenario(REPO / "scenarios" / "green.yaml")
+    ts = time.strftime("%Y%m%d-%H%M%S") + "-live-full"
+    run_dir = REPO / "runs" / ts
+    clock = TickClock()
+    log = IncidentLog(run_dir, keep_last=20)
+    sup = Supervisor(g, log, now=clock.now, baseline_id="N3", target=0.58)
+    worker = _HybridWorker(MockWorker(scenario, REPO, TICK_S), live_nodes)
+    print(f"LIVE full run: real agent on {sorted(live_nodes)}, mock elsewhere "
+          f"(N4 compute=sim_train). run_dir={run_dir}")
+    result = await Orchestrator(g, sup, worker, scenario, clock, run_dir, REPO,
+                                tick_s=TICK_S).run()
+    _print_summary(result)
+    return result
+
+
 def main() -> int:
     a = parse_args()
     if a.plan is not None:
@@ -301,12 +397,10 @@ def main() -> int:
         from core.replay import replay_render
         return replay_render(Path(a.replay))
     if a.live:
-        from runtime.worker import RealWorker
-        try:
-            RealWorker()      # raises: live path (mini-swe-agent) is tomorrow's work
-        except NotImplementedError as e:
-            print(f"--live is not wired tonight: {e}", file=sys.stderr)
-        return 1
+        if a.node:
+            return _run_live_node(a.node)
+        result = asyncio.run(run_live_full())      # full graph, N3 real agent
+        return 0 if result.quiesced else 2
     if not a.mock:
         raise SystemExit("specify a mode: --mock --scenario X | --replay FILE | "
                          "--serve [--replay FILE] | --live")
