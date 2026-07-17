@@ -3,3 +3,11 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
+# secrets — never commit
+.env
+.env.*
+*.key
+*.pem
+secrets.*
+.venv/
+venv/
