@@ -12,6 +12,7 @@ import asyncio
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -194,6 +195,7 @@ class DemoController:
         self.feed: _ReplayFeed | None = None
         self.plan_path = REPO / "graph" / "plan_cached.json"
         self.run_dir: Path | None = None
+        self.live_model = os.environ.get("LIVE_MODEL") or "z-ai/glm-5.2"
         self.status = {"state": "idle", "scenario": None, "banner": None,
                        "playlist": [], "idx": 0, "tick_ms": 1200}
 
@@ -203,11 +205,20 @@ class DemoController:
     def frame_bytes(self) -> bytes:
         return self.feed.frame_bytes() if self.feed else _EMPTY
 
+    def set_live_model(self, model: str) -> str | None:
+        """Validate + store OpenRouter model id for the next --research hop."""
+        m = (model or "").strip()
+        if not m or len(m) > 80 or not re.fullmatch(r"[A-Za-z0-9_./:[\]-]+", m):
+            return "bad model id"
+        self.live_model = m
+        return None
+
     def status_snapshot(self) -> dict:
         s = dict(self.status)
         f = self.feed
         s["replay"] = {"paused": bool(f and f.paused), "idx": (f.idx if f else 0),
                        "len": (len(f.lines) if f else 0)}
+        s["live_model"] = self.live_model
         return s
 
     def ctl(self, op: str, ms: int = 1000):
@@ -266,14 +277,23 @@ class DemoController:
             self.status.update(state="idle", banner=None)
         threading.Thread(target=worker, daemon=True).start()
 
-    def _play_research(self, question: str, tick_ms: int = 500):
+    def _play_research(self, question: str, tick_ms: int = 500,
+                       model: str | None = None):
         """M12: full-live run of a typed-in question, then animate its replay.
-        The dashboard never blocks on the ~2min run; status shows 'preparing'."""
+        The dashboard never blocks on the ~2min run; status shows 'preparing'.
+        `model` (if set) becomes LIVE_MODEL for planner + live agents."""
+        if model:
+            err = self.set_live_model(model)
+            if err:
+                self.status.update(state="idle")
+                return
         self.status.update(state="preparing", scenario="research", banner=None,
                            tick_ms=tick_ms)
+        env = os.environ.copy()
+        env["LIVE_MODEL"] = self.live_model
         try:
             subprocess.run([sys.executable, str(REPO / "run.py"), "--research",
-                            question], cwd=str(REPO),
+                            question], cwd=str(REPO), env=env,
                            capture_output=True, text=True, timeout=600)
         except Exception:
             self.status.update(state="idle")
@@ -293,9 +313,9 @@ class DemoController:
             time.sleep(0.1)
         time.sleep(2.5)                          # hold the final frame
 
-    def run_research(self, question: str):
+    def run_research(self, question: str, model: str | None = None):
         def worker():
-            self._play_research(question)
+            self._play_research(question, model=model)
             self.status.update(state="idle", banner=None)
         threading.Thread(target=worker, daemon=True).start()
 
@@ -491,13 +511,24 @@ def serve(port: int, replay_file: str | None) -> int:
                     self._json({"ok": True, "scenario": scenario})
             elif u.path == "/research":
                 question = (q.get("q") or [""])[0].strip()
+                model = (q.get("model") or [""])[0].strip() or None
                 if not question:
                     self._json({"error": "missing q"}, 400)
                 elif ctl.busy():
                     self._json({"error": "a run is already active"}, 409)
+                elif model and ctl.set_live_model(model):
+                    self._json({"error": "bad model id"}, 400)
                 else:
-                    ctl.run_research(question)
-                    self._json({"ok": True, "scenario": "research"})
+                    ctl.run_research(question, model=model)
+                    self._json({"ok": True, "scenario": "research",
+                                "model": ctl.live_model})
+            elif u.path == "/model":
+                model = (q.get("id") or [""])[0].strip()
+                err = ctl.set_live_model(model)
+                if err:
+                    self._json({"error": err}, 400)
+                else:
+                    self._json({"ok": True, "model": ctl.live_model})
             elif u.path == "/demo":
                 if ctl.busy():
                     self._json({"error": "a run is already active"}, 409)
@@ -642,10 +673,11 @@ def _apply_compute_override(g, script: str) -> None:
 
 
 async def _run_live_graph(g, scenario, run_dir: Path, enable: set,
-                          question: str, bait: bool = False):
+                          question: str, bait: bool = False, free: bool = False):
     """Shared live execution for live_research / --research: RoleWorker dispatch
     by (kind, role), role-wired live hooks, lineup + cost ledgers. tick_s=0.8 so
-    the hung law (K_FREEZE=3 ticks) >> 1.8s stage cadence; 1200 ticks = 960s cap."""
+    the hung law (K_FREEZE=3 ticks) >> 1.8s stage cadence; 1200 ticks = 960s cap.
+    free=True (M17): role-anchored FreeOrchestrator for free-topology plans."""
     from runtime import roles
     live_cfg = scenario.live or {}
     tick_s = 0.8
@@ -661,14 +693,19 @@ async def _run_live_graph(g, scenario, run_dir: Path, enable: set,
     tracker = {"cost": 0.0}
     lineup: dict = {}
     worker = roles.RoleWorker(MockWorker(scenario, REPO, tick_s), enable, live_cfg,
-                              tracker, lineup, question, REPO, bait=bait)
-    orch = Orchestrator(
+                              tracker, lineup, question, REPO, bait=bait, graph=g)
+    if free:
+        from runtime.free_orch import FreeOrchestrator
+        orch_cls = FreeOrchestrator
+    else:
+        orch_cls = Orchestrator
+    orch = orch_cls(
         g, sup, worker, scenario, clock, run_dir, REPO, tick_s=tick_s,
         long_manifest_hook=(roles.method_manifest_hook(live_cfg, tracker, lineup,
                                                        REPO, bait=bait)
                             if roles.METHOD_MANIFEST in enable else None),
         n5_hook=(roles.analysis_hook(tracker, lineup, roles.baseline_node(g),
-                                     roles.method_node(g))
+                                     roles.method_nodes(g))
                  if roles.ANALYSIS in enable else None),
         n6_hook=(roles.report_polish_hook(tracker, lineup)
                  if roles.REPORT_POLISH in enable else None))
@@ -676,9 +713,11 @@ async def _run_live_graph(g, scenario, run_dir: Path, enable: set,
     result = await orch.run()
     wall = time.time() - t0
     if roles.REPORT_POLISH in enable:
-        # N6 fires mid-run; re-polish against the FINAL render so the archived
+        # Report fires mid-run; re-polish against the FINAL render so the archived
         # polished report never quotes a stale intermediate verdict line.
-        roles.report_polish_hook(tracker, lineup)("N6", run_dir, None)
+        rid = next((nid for nid, n in g.nodes.items() if roles.is_report_node(n)), None)
+        if rid is not None:
+            roles.report_polish_hook(tracker, lineup)(rid, run_dir, None)
     cost = {"model": os.environ.get("LIVE_MODEL") or "default",
             "cost_usd": round(tracker["cost"], 6), "wall_s": round(wall, 1),
             "budget_usd": live_cfg.get("api_budget_usd", 3.0)}
@@ -690,27 +729,32 @@ async def _run_live_graph(g, scenario, run_dir: Path, enable: set,
 
 
 async def run_research(question: str, bait: bool = False):
-    """M12 real-life path: one sentence in -> planner (error-feedback retry <=3)
-    -> schema+normalizer validation -> role-driven live execution -> report."""
+    """M12 real-life path + M17 free topology: one sentence in -> free planner
+    (role-completeness validated, error-feedback retry <=3) -> role-anchored
+    live execution (FreeOrchestrator) -> report."""
     from graph import planner
     from runtime import roles
     ts = time.strftime("%Y%m%d-%H%M%S") + "-research" + ("-bait" if bait else "")
     run_dir = REPO / "runs" / ts
     plan = planner.generate_plan_retry(question, run_dir,
-                                       REPO / "graph" / "plan_cached.json")
+                                       REPO / "graph" / "plan_cached.json",
+                                       free=True)
     (run_dir / "plan_result.json").write_text(json.dumps(plan, indent=2),
                                               encoding="utf-8")
     print(f"planner: source={plan['source']} attempts={plan.get('attempts')} "
-          f"cost=${plan.get('cost')} valid={plan['valid']}"
+          f"cost=${plan.get('cost')} valid={plan['valid']} free={plan.get('free')}"
           + (f" error={plan.get('error')}" if plan.get("error") else ""))
     g = load_graph(plan["out"])
+    print(f"topology: {len(g.nodes)} nodes, {len(g.edges)} edges "
+          f"(baseline={roles.baseline_node(g)}, methods={roles.method_nodes(g)})")
     scenario = load_scenario(REPO / "scenarios" / "live_research.yaml")
     if scenario.compute_script:
         _apply_compute_override(g, scenario.compute_script)
     bait_dir = roles.make_bait_dataset(REPO) if bait else None
     try:
         result, cost, lineup = await _run_live_graph(
-            g, scenario, run_dir, set(roles.DEFAULT_LIVE_ENABLE), question, bait=bait)
+            g, scenario, run_dir, set(roles.DEFAULT_LIVE_ENABLE), question,
+            bait=bait, free=True)
     finally:
         if bait_dir:
             roles.drop_bait_dataset(REPO)       # frozen data_hash must not drift
