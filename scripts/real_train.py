@@ -1,86 +1,44 @@
 #!/usr/bin/env python3
-"""Real staged GBDT trainer (stdlib only) — live_research long node, v1.1.
+"""Real staged trainer CLI — live_research / --research long node.
 
-Regression on the v1.1 benchmark (data/dataset.csv, 400 rows x 7 features;
-dev rows from data/split.json): gradient boosting of depth-1 decision stumps
-on squared loss. dev_metric = R2 on the dev split — a real function of the
-model, rising fast then saturating near the noise/interaction ceiling (~0.85).
+Dispatches to runtime.trainers registry. Supervisor contract unchanged:
+dev_metric = R^2 on the frozen dev split; each stage appends metrics.jsonl;
+every 10% writes ckpt/ckpt_<pct>.txt (+ .pkl). --profile is accepted for
+orchestrator drop-in compatibility.
 
-Each stage appends {"step","dev_metric"} to metrics.jsonl; every 10% writes
-ckpt/ckpt_<pct>.txt (step=/dev= lines, consumed by N4e and eval/score.py) plus
-ckpt/ckpt_<pct>.pkl (the pickled ensemble — a real checkpoint).
-
-Wall-clock is paced by --sleep so compute_phase ~= 100-120s (same discipline
-as sim_train: values are real, the clock is paced). --profile is accepted for
-drop-in compatibility with the orchestrator's long-node launcher; the curve
-comes from the model, not the name.
+Add a model: see runtime/trainers/registry.py docstring.
 """
+from __future__ import annotations
+
 import argparse
-import csv
-import json
-import pickle
-import time
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-
-def load():
-    rows = list(csv.DictReader((ROOT / "data" / "dataset.csv").open()))
-    X = [[float(r[f"x{j}"]) for j in range(1, 8)] for r in rows]
-    y = [float(r["y"]) for r in rows]
-    split = json.loads((ROOT / "data" / "split.json").read_text())
-    return X, y, split["train"], split["dev"]
-
-
-def fit_stump(X, res, tr):
-    """Depth-1 regression stump minimizing SSE on the train residuals."""
-    best = None
-    for j in range(len(X[0])):
-        vals = sorted(X[i][j] for i in tr)
-        for q in range(1, 10):
-            thr = vals[len(vals) * q // 10]
-            lo = [res[i] for i in tr if X[i][j] < thr]
-            hi = [res[i] for i in tr if X[i][j] >= thr]
-            if not lo or not hi:
-                continue
-            ml, mh = sum(lo) / len(lo), sum(hi) / len(hi)
-            sse = sum((r - ml) ** 2 for r in lo) + sum((r - mh) ** 2 for r in hi)
-            if best is None or sse < best[0]:
-                best = (sse, j, thr, ml, mh)
-    return best[1:]
+from runtime.trainers import TrainContext, allowed, get  # noqa: E402
+from runtime.trainers.common import load  # noqa: E402
 
 
 def main():
+    models = allowed()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--profile", default="live")   # compat; curve comes from the model
+    ap.add_argument("--profile", default="live")   # compat; ignored for curve
+    ap.add_argument("--model", default="gbdt", choices=models)
     ap.add_argument("--stages", type=int, default=60)
-    ap.add_argument("--sleep", type=float, default=1.8)   # 60*1.8 ~= 108s compute_phase
+    ap.add_argument("--sleep", type=float, default=1.8)
     ap.add_argument("--lr", type=float, default=0.5)
+    ap.add_argument("--alpha", type=float, default=1.0,
+                    help="L2 (ridge) / L1 (lasso) strength")
     a = ap.parse_args()
     X, y, tr, dev = load()
-    F = [sum(y[i] for i in tr) / len(tr)] * len(X)
-    stumps = []
-    mean_dev = sum(y[i] for i in dev) / len(dev)
-    ss_tot = sum((y[i] - mean_dev) ** 2 for i in dev)
-    Path("ckpt").mkdir(exist_ok=True)
-    with open("metrics.jsonl", "a", encoding="utf-8") as f:
-        for step in range(1, a.stages + 1):
-            res = [y[i] - F[i] for i in range(len(X))]
-            j, thr, ml, mh = fit_stump(X, res, tr)
-            stumps.append((j, thr, ml, mh))
-            for i in range(len(X)):
-                F[i] += a.lr * (ml if X[i][j] < thr else mh)
-            ss_res = sum((y[i] - F[i]) ** 2 for i in dev)
-            d = round(max(0.0, 1.0 - ss_res / ss_tot), 4)
-            f.write(json.dumps({"step": step, "dev_metric": d}) + "\n")
-            f.flush()
-            if step % max(1, a.stages // 10) == 0:
-                pct = step * 100 // a.stages
-                Path(f"ckpt/ckpt_{pct}.txt").write_text(f"step={step}\ndev={d}\n")
-                with open(f"ckpt/ckpt_{pct}.pkl", "wb") as pk:
-                    pickle.dump({"stages": step, "lr": a.lr, "stumps": list(stumps)}, pk)
-            time.sleep(a.sleep)
+    ctx = TrainContext(
+        X=X, y=y, train=tr, dev=dev,
+        stages=a.stages, sleep=a.sleep, lr=a.lr, alpha=a.alpha,
+    )
+    get(a.model).run(ctx)
 
 
 if __name__ == "__main__":

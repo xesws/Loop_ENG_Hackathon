@@ -188,6 +188,26 @@
   .pblock .ph{padding:5px 10px;color:var(--dim);font-size:11.5px;border-bottom:1px solid var(--line)}
   .pblock pre{margin:0;padding:8px 10px;white-space:pre-wrap;word-break:break-word;
     font-size:11.8px;max-height:160px;overflow-y:auto;color:var(--ink);font-family:ui-monospace,monospace}
+  /* all-green result toast (bottom-right) */
+  #resultToast{position:fixed;right:18px;bottom:18px;z-index:45;width:min(420px,92vw);
+    display:none;background:#0d1117;border:1px solid var(--verified);border-left:5px solid var(--verified);
+    border-radius:12px;padding:14px 16px 16px;box-shadow:0 12px 36px rgba(0,0,0,.55);
+    animation:toastin .35s ease}
+  #resultToast.show{display:block}
+  @keyframes toastin{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+  #resultToast .rt-h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  #resultToast .rt-h b{font-size:14px;color:var(--verified)}
+  #resultToast .rt-x{margin-left:auto;background:none;border:1px solid var(--line);color:var(--dim);
+    border-radius:7px;font:13px ui-monospace,monospace;padding:2px 8px;cursor:pointer}
+  #resultToast .rt-x:hover{color:var(--ink);border-color:var(--running)}
+  #resultToast .rt-v{font-size:13px;line-height:1.45;margin:0 0 10px;color:var(--ink)}
+  #resultToast .rt-path{font-size:11.5px;color:var(--dim);word-break:break-all;margin:4px 0;
+    font-family:ui-monospace,monospace}
+  #resultToast .rt-path b{color:var(--ink);font-weight:600}
+  #resultToast .rt-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  #resultToast .rt-actions button{font:12px ui-monospace,monospace;color:var(--ink);background:#21262d;
+    border:1px solid var(--line);border-radius:7px;padding:6px 10px;cursor:pointer}
+  #resultToast .rt-actions button:hover{border-color:var(--running)}
 </style>
 </head>
 <body>
@@ -206,6 +226,7 @@
     <button id="demoExtBtn">▶ DEMO+</button>
     <select id="liveModel" title="LIVE_MODEL for planner + live agents">
       <option value="z-ai/glm-5.2">GLM 5.2</option>
+      <option value="x-ai/grok-4.5">Grok 4.5</option>
       <option value="z-ai/glm-4.5-air">GLM 4.5 Air</option>
       <option value="openai/gpt-4o-mini">GPT-4o mini</option>
       <option value="openai/gpt-4o">GPT-4o</option>
@@ -250,6 +271,16 @@
     <div id="pc-prompt" style="display:none"></div>
   </div>
 </div>
+<div id="resultToast" role="status" aria-live="polite">
+  <div class="rt-h"><b>RESULT</b><button class="rt-x" id="rtClose" title="dismiss">✕</button></div>
+  <div class="rt-v" id="rtVerdict">—</div>
+  <div class="rt-path">run dir<br><b id="rtRun">—</b></div>
+  <div class="rt-path">report<br><b id="rtReport">—</b></div>
+  <div class="rt-actions">
+    <button type="button" id="rtCopy">Copy run path</button>
+    <button type="button" id="rtPrompt">Open Prompt tab</button>
+  </div>
+</div>
 <div id="drawer" aria-hidden="true">
   <button id="dclose" title="close (Esc)">✕</button>
   <h3>Evidence drawer</h3>
@@ -275,7 +306,7 @@ const STATUS_PHRASE = { pending:'queued', running:'working', verified:'verified 
 const STATUS_SHORT = { pending:'queued', running:'working', verified:'verified ✓',
   blocked:'blocked', stale:'stale', stuck:'stuck', oscillating:'oscillating',
   plateaued:'plateaued', killed:'killed', superseded:'retired' };
-// static per-node description (state.json is frozen and has no goal/scope/budget)
+// static per-node description for the cached N0..N7 fixture (free plans fill in via syncGraphLayout)
 const NODE_META = {
   N0:{name:'Protocol',      goal:'Write the data card + eval protocol spec', scope:'protocol/',      budget:'fast'},
   N1:{name:'Data',          goal:'Prepare and split the dataset',            scope:'data_prep/',     budget:'fast'},
@@ -286,13 +317,16 @@ const NODE_META = {
   N5:{name:'Analysis',      goal:'Compare method vs baseline; may spawn nodes',scope:'analysis/',    budget:'reactive · can_spawn'},
   N6:{name:'Report',        goal:'Compile the anytime report',              scope:'report/',        budget:'reactive'},
   N7:{name:'Ablation',      goal:'Explain the plateau (spawned at runtime)', scope:'ablation/',      budget:'fast · spawned by N5'} };
-const POS = { N0:[70,215], N1:[195,215], N2:[320,215], N3:[470,115], N4:[470,305],
+// Hand-tuned cached fixture; free topologies get a layered layout in syncGraphLayout.
+const CACHED_POS = { N0:[70,215], N1:[195,215], N2:[320,215], N3:[470,115], N4:[470,305],
   N4e:[610,305], N5:[760,215], N6:[905,215], N7:[760,355] };
-const EDGES = [
+const CACHED_EDGES = [
   ['N0','N1','artifact'],['N1','N2','artifact'],['N2','N3','artifact'],
   ['N2','N4','artifact'],['N2','N4e','artifact'],
   ['N4','N4e','stream'],['N3','N5','stream'],['N4e','N5','stream'],['N5','N6','stream'],
   ['N5','N4','back'],['N5','N7','artifact'] ];
+let POS = Object.assign({}, CACHED_POS);
+let EDGES = CACHED_EDGES.map(e=>e.slice());
 const SVG='http://www.w3.org/2000/svg';
 const STAGE = new URLSearchParams(location.search).get('stage')==='1';
 if(STAGE) document.documentElement.classList.add('stage');
@@ -300,7 +334,85 @@ const NS = STAGE?1.22:1;                 // node-size scale in stage mode
 const svg=document.getElementById('graph');
 const KEY=new Set(['PLATEAU_TRIP','SCOPE_VIOLATION','COMPARABILITY_BLOCK']);
 let lastState=null, lastIncCount=0, seenNodes=new Set(), flashCounters={}, focusCounters={}, booted=false;
-let edgeLayer=null, nodeLayer=null, lastPresent='';   // split layers so edge-flow animation persists
+let edgeLayer=null, nodeLayer=null, lastPresent='', lastLayoutKey='';   // split layers so edge-flow animation persists
+
+function _roleRank(role, kind){
+  if(kind==='reactive' && role==='eval') return 4;
+  if(kind==='long') return 3;
+  const m={protocol:0,data:1,harness:2,experiment:3,experiment_baseline:3,
+    experiment_method:3,eval:3,train:3,analysis:5,report:6,ablation:7};
+  return m[role]!=null?m[role]:3;
+}
+/** Build POS/EDGES for the current plan (+ any spawned state-only nodes).
+ *  Cached N0..N7 keeps the hand-tuned demo layout; free ids get a layered DAG. */
+function syncGraphLayout(plan, stateNodes){
+  const pnodes=(plan&&plan.nodes)||[];
+  const byId={};
+  for(const n of pnodes) byId[n.id]={id:n.id,kind:n.kind,role:n.role||''};
+  for(const n of (stateNodes||[])){
+    if(!byId[n.id]) byId[n.id]={id:n.id,kind:n.kind,role:n.role||''};
+  }
+  const ids=Object.keys(byId);
+  if(!ids.length) return;
+  const layoutKey=ids.slice().sort().join(',')+'|'+(plan&&plan.edges?plan.edges.length:0);
+  if(layoutKey===lastLayoutKey) return;
+  lastLayoutKey=layoutKey;
+  lastPresent='';                          // force edge rebuild
+  // Hand-tuned demo layout only when every present id is the cached fixture.
+  const classic=!ids.some(id=>!CACHED_POS[id]) && ids.includes('N0') && ids.includes('N4');
+  if(classic){
+    POS=Object.assign({}, CACHED_POS);
+    EDGES=CACHED_EDGES.map(e=>e.slice());
+    return;
+  }
+  const raw=(plan&&plan.edges)||[];
+  // Drop edges whose endpoints aren't in this graph (stale cached plan vs free state).
+  EDGES=raw.map(e=>[e.src,e.dst,(e.kind==='back_edge'?'back':e.kind)])
+           .filter(([a,b])=>byId[a]&&byId[b]);
+  const parents={}; for(const id of ids) parents[id]=[];
+  for(const[a,b,k] of EDGES){
+    if(k==='back'||!parents[b]||!byId[a]) continue;
+    parents[b].push(a);
+  }
+  const rank={};
+  function getRank(id, stack){
+    if(rank[id]!=null) return rank[id];
+    if(stack.has(id)) return _roleRank(byId[id].role, byId[id].kind);
+    stack.add(id);
+    const ps=parents[id]||[];
+    rank[id]=ps.length
+      ? Math.max(...ps.map(p=>getRank(p, stack)))+1
+      : _roleRank(byId[id].role, byId[id].kind);
+    stack.delete(id);
+    return rank[id];
+  }
+  ids.forEach(id=>getRank(id, new Set()));
+  const buckets={};
+  for(const id of ids){
+    const r=Math.round(rank[id]);
+    (buckets[r]=buckets[r]||[]).push(id);
+  }
+  const ranks=Object.keys(buckets).map(Number).sort((a,b)=>a-b);
+  const W=1120,H=430, mx=70, my=70;
+  POS={};
+  ranks.forEach((r,ri)=>{
+    const col=buckets[r].slice().sort((a,b)=>{
+      const score=k=>k==='long'?2:k==='reactive'?1:0;
+      return score(byId[a].kind)-score(byId[b].kind)||a.localeCompare(b);
+    });
+    const x=ranks.length<=1 ? W/2 : mx + ri*(W-2*mx)/(ranks.length-1);
+    col.forEach((id,j)=>{
+      const y=col.length===1 ? H/2 : my + j*(H-2*my)/Math.max(1,col.length-1);
+      POS[id]=[x,y];
+    });
+  });
+  for(const id of ids){
+    if(NODE_META[id]) continue;
+    const n=byId[id];
+    NODE_META[id]={name:n.role||n.kind||id,
+      goal:`${n.role||'node'} (${n.kind||'?'})`, scope:id+'/', budget:n.kind||''};
+  }
+}
 
 function el(t,a={}){const e=document.createElementNS(SVG,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
 function fmt(x){return (x==null)?'–':(+x).toFixed(3);}
@@ -323,10 +435,9 @@ const NARR = {
   FALSE_COMPLETION:(i)=> `${i.node} claimed done but failed acceptance → bounced to retry.` };
 function sayIncident(i){ return (NARR[i.type]?NARR[i.type](i):`${i.type} on ${i.node}.`); }
 function describeState(s){
-  const by=Object.fromEntries(s.nodes.map(n=>[n.id,n]));
-  const n4=by.N4;
-  if(n4 && n4.status==='running' && n4.step!=null)
-    return `N4 fine-tuning — step ${n4.step}, dev ${fmt(n4.best_dev)} vs baseline 0.58 ${(+n4.best_dev>=0.58)?'(ahead)':'(behind but climbing)'}.`;
+  const longRun=s.nodes.find(n=>n.kind==='long'&&n.status==='running'&&n.step!=null);
+  if(longRun)
+    return `${longRun.id} fine-tuning — step ${longRun.step}, dev ${fmt(longRun.best_dev)} vs baseline 0.58 ${(+longRun.best_dev>=0.58)?'(ahead)':'(behind but climbing)'}.`;
   if(!s.nodes.length) return 'Ready. Pick a scenario, or press ▶ DEMO.';
   const allv=s.nodes.every(n=>n.status==='verified');
   if(allv) return 'All nodes verified — research answered: the fine-tuned model beats the baseline.';
@@ -344,16 +455,22 @@ function setNarr(tag,txt,col){
 
 // ---------- graph ----------
 function drawEdges(present){
+  let backMid=null;
   for(const[a,b,kind]of EDGES){
     if(!POS[a]||!POS[b])continue;
-    if((a==='N7'||b==='N7')&&!present.has('N7'))continue;
+    // skip inactive spawn_only sinks not yet present (e.g. cached N7 / free Ab7)
+    if(!present.has(a)||!present.has(b))continue;
     const cls='edge'+(kind==='stream'?' stream':kind==='back'?' back':'');
     if(kind==='back'){const[x1,y1]=POS[a],[x2,y2]=POS[b];
       edgeLayer.appendChild(el('path',{class:cls,d:`M${x1},${y1} C ${x1},${y1+95} ${x2},${y2+95} ${x2},${y2}`}));
+      if(!backMid) backMid=[(x1+x2)/2, Math.max(y1,y2)+70];
     } else {const[x1,y1]=POS[a],[x2,y2]=POS[b];
       edgeLayer.appendChild(el('path',{class:cls,d:`M${x1},${y1} L${x2},${y2}`}));}
   }
-  edgeLayer.appendChild(el('text',{x:632,y:300,class:'nmeta'})).textContent='lap ≤ 3';
+  if(backMid){
+    const t=el('text',{x:backMid[0],y:backMid[1],class:'nmeta','text-anchor':'middle'});
+    t.textContent='lap ≤ 3'; edgeLayer.appendChild(t);
+  }
 }
 function shape(kind,x,y,fill){
   if(kind==='fast'){const w=64*NS,h=40*NS;return el('rect',{x:x-w/2,y:y-h/2,width:w,height:h,rx:8,
@@ -364,8 +481,9 @@ function shape(kind,x,y,fill){
 }
 function render(state, flashNodes, focusNodes){
   if(!edgeLayer){edgeLayer=el('g');nodeLayer=el('g');svg.appendChild(edgeLayer);svg.appendChild(nodeLayer);}
+  syncGraphLayout(PLAN, state.nodes);
   const present=new Set(state.nodes.map(n=>n.id));
-  const pk=[...present].sort().join(',');
+  const pk=[...present].sort().join(',')+'@'+lastLayoutKey;
   if(pk!==lastPresent){edgeLayer.textContent='';drawEdges(present);lastPresent=pk;}  // rebuild edges only when node-set changes
   nodeLayer.textContent='';
   for(const n of state.nodes){
@@ -455,6 +573,7 @@ async function poll(){
     render(s,flash,focus);
     renderIncidents(s.incidents||[]);
     renderRun();renderNodes();
+    maybeShowResultToast(s);
     if(narrHold>0)narrHold--; else setNarr('SUPERVISOR',describeState(s),'var(--running)');
   }catch(e){
     document.getElementById('conn').textContent='disconnected';document.getElementById('conn').className='disc';
@@ -479,6 +598,8 @@ function renderIncidents(incs){
 async function loadQuestion(){
   try{const g=await (await fetch('/plan_cached.json',{cache:'no-store'})).json();
     PLAN=g;
+    lastLayoutKey='';                 // plan swapped — recompute free / cached layout
+    syncGraphLayout(PLAN, (lastState&&lastState.nodes)||[]);
     document.getElementById('question').textContent=g.research_question||'';}
   catch(e){document.getElementById('question').textContent='';}
 }
@@ -528,7 +649,16 @@ async function pollStatus(){
       if([...sel.options].some(o=>o.value===st.live_model)) sel.value=st.live_model;
       document.getElementById('modelLbl').textContent=st.live_model;
     }
-    if(st.state!==window._lst){window._lst=st.state;if(st.state==='playing'){loadQuestion();loadRunDocs();}}
+    if(st.state!==window._lst){
+      window._lst=st.state;
+      if(st.state==='preparing'){
+        resultToastKey=''; hideResultToast(); window._snapEnd=false;
+        // Mock scene buttons reset to plan_cached immediately so N0..N7 layout
+        // returns before the new replay starts (no leftover free-topology ghosts).
+        if(st.scenario && st.scenario!=='research'){ lastLayoutKey=''; loadQuestion(); }
+      }
+      if(st.state==='playing'){loadQuestion();loadRunDocs();}
+    }
     const banner=document.getElementById('banner');
     if(st.state==='banner'||st.state==='preparing'){
       let head,sub;
@@ -541,6 +671,13 @@ async function pollStatus(){
     const rc=st.replay||{}; const rctl=document.getElementById('rctl');
     if(rc.len>0)rctl.classList.add('show'); else rctl.classList.remove('show');
     document.getElementById('pauseBtn').textContent=rc.paused?'▶':'⏸';
+    // If idle but not parked on the last frame (mid-hung freeze), snap to end
+    // once so the graph shows killed/verified instead of a stuck "running".
+    if(st.state==='idle' && rc.len>1 && rc.idx < rc.len-1 && !window._snapEnd){
+      window._snapEnd=true;
+      post('/demo/ctl?op=end');
+    }
+    if(st.state==='playing') window._snapEnd=false;
     if(busy){const c=document.getElementById('conn');c.textContent=st.state+(st.scenario?(' · '+st.scenario):'')+(rc.paused?' · paused':'');c.className='';}
   }catch(e){}
 }
@@ -601,7 +738,49 @@ deepLinkIncident();
 
 // ---------- run-info panels (Run / Nodes / Prompt tabs) ----------
 let PLAN=null,RUNINFO=null,PROMPTS=null,PTAB='run';
+let resultToastKey='';   // run_dir already toasted (avoid re-popping every poll)
 function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function allNodesGreen(s){
+  const ns=(s&&s.nodes)||[];
+  return ns.length>0 && ns.every(n=>n.status==='verified');
+}
+function hideResultToast(){document.getElementById('resultToast').classList.remove('show');}
+function fillResultToast(info){
+  const v=info&&info.verdict;
+  const answered=v&&/^RESEARCH ANSWERED/i.test(v);
+  const withheld=v&&/WITHHELD|NOT comparable/i.test(v);
+  const el=document.getElementById('resultToast');
+  el.style.borderColor=withheld?'var(--killed)':(answered?'var(--verified)':'var(--stale)');
+  el.style.borderLeftColor=el.style.borderColor;
+  document.querySelector('#resultToast .rt-h b').style.color=el.style.borderLeftColor;
+  document.getElementById('rtVerdict').textContent=v||'All active nodes verified — open the report for the verdict line.';
+  document.getElementById('rtRun').textContent=info.run_path||info.run_dir||'(unknown run dir)';
+  document.getElementById('rtReport').textContent=info.report_path||'(report/report.md under the run dir)';
+  el.dataset.runPath=info.run_path||'';
+  el.classList.add('show');
+}
+async function maybeShowResultToast(s){
+  if(!allNodesGreen(s)) return;
+  try{RUNINFO=await (await fetch('/runinfo.json',{cache:'no-store'})).json();}catch(e){return;}
+  const key=RUNINFO.run_dir||RUNINFO.run_path||'anon';
+  if(key===resultToastKey) return;
+  resultToastKey=key;
+  fillResultToast(RUNINFO);
+  renderRun();
+}
+document.getElementById('rtClose').onclick=hideResultToast;
+document.getElementById('rtCopy').onclick=async()=>{
+  const p=document.getElementById('resultToast').dataset.runPath
+    ||document.getElementById('rtRun').textContent;
+  try{await navigator.clipboard.writeText(p);
+    document.getElementById('rtCopy').textContent='Copied';
+    setTimeout(()=>document.getElementById('rtCopy').textContent='Copy run path',1200);
+  }catch(e){document.getElementById('rtCopy').textContent='Copy failed';}
+};
+document.getElementById('rtPrompt').onclick=()=>{
+  const b=document.querySelector('#ptabs button[data-t="prompt"]');
+  if(b) b.click();
+};
 async function loadRunDocs(){
   try{RUNINFO=await (await fetch('/runinfo.json',{cache:'no-store'})).json();}catch(e){RUNINFO=null;}
   try{PROMPTS=await (await fetch('/prompts.json',{cache:'no-store'})).json();}catch(e){PROMPTS=null;}

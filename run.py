@@ -104,13 +104,33 @@ class _ReplayFeed:
     auto-freezes ~2s when it lands on a key-incident frame so the money moment
     lands on stage. The loop stays alive (so step-back after the end still works)."""
     def __init__(self, path: Path, adv_s: float = 0.5):
-        self.lines = [json.loads(ln) for ln in Path(path).read_text().splitlines()
-                      if ln.strip()]
-        self.adv_s = max(0.05, adv_s)
+        self.path = Path(path)
+        self.lines: list = []
         self.idx = 0
+        self.adv_s = max(0.05, adv_s)
         self.paused = False
         self._auto_hold = 0.0
         self._stop = False
+        self.reload()
+
+    def reload(self) -> int:
+        """Re-read replay.jsonl from disk (picks up frames flushed after open)."""
+        if not self.path.exists():
+            self.lines = []
+            return 0
+        self.lines = [json.loads(ln) for ln in self.path.read_text().splitlines()
+                      if ln.strip()]
+        if self.lines:
+            self.idx = min(getattr(self, "idx", 0), len(self.lines) - 1)
+        return len(self.lines)
+
+    def snap_to_end(self):
+        """Park on the final frame so idle UI never shows a mid-run freeze."""
+        self.reload()
+        if self.lines:
+            self.idx = len(self.lines) - 1
+        self.paused = True
+        self._auto_hold = 0.0
 
     def _is_key(self, i) -> bool:
         if not (0 <= i < len(self.lines)):
@@ -234,12 +254,28 @@ class DemoController:
             self.feed.paused = False
         elif op == "speed":
             self.feed.set_speed(ms)
+        elif op == "end":
+            self.feed.snap_to_end()
 
     def _swap_feed(self, feed):
         if self.feed:
             self.feed.stop()
         self.feed = feed
         feed.start()
+
+    def _clear_feed(self):
+        """Drop the current replay so preparing doesn't keep showing the last graph."""
+        if self.feed:
+            self.feed.stop()
+            self.feed = None
+
+    def _child_env(self) -> dict:
+        """Prefer this interpreter's bin/ on PATH so mock acceptance `python …`
+        never hits a system Python 2.x (macOS /usr/bin/python)."""
+        env = os.environ.copy()
+        bindir = str(Path(sys.executable).resolve().parent)
+        env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
+        return env
 
     def load_direct(self, path: Path, tick_ms: int = 500):
         plan = Path(path).parent / "plan_live.json"   # replay shows its own question
@@ -250,26 +286,30 @@ class DemoController:
 
     def _play_scenario(self, scenario: str, tick_ms: int):
         self.plan_path = REPO / "graph" / "plan_cached.json"   # mock = cached plan
+        self.run_dir = None
+        self._clear_feed()
         self.status.update(state="preparing", scenario=scenario, banner=None,
                            tick_ms=tick_ms)
+        before = set(glob.glob(str(REPO / "runs" / f"*-{scenario}" / "replay.jsonl")))
         try:
             subprocess.run([sys.executable, str(REPO / "run.py"), "--mock",
                             "--scenario", scenario], cwd=str(REPO),
+                           env=self._child_env(),
                            capture_output=True, text=True, timeout=120)
         except Exception:
             self.status.update(state="idle")
             return
-        files = glob.glob(str(REPO / "runs" / f"*-{scenario}" / "replay.jsonl"))
-        if not files:
+        replay = self._resolve_own_replay(scenario, before)
+        if replay is None:
             self.status.update(state="idle")
             return
-        newest = Path(max(files, key=os.path.getmtime))
-        self.run_dir = newest.parent
-        self._swap_feed(_ReplayFeed(newest, adv_s=tick_ms / 1000.0))
+        self.run_dir = replay.parent
+        self._swap_feed(_ReplayFeed(replay, adv_s=tick_ms / 1000.0))
         self.status.update(state="playing")
         while not self.feed.done:
             time.sleep(0.1)
         time.sleep(2.5)                       # hold the final frame
+        self.feed.snap_to_end()
 
     def run_one(self, scenario: str, tick_ms: int):
         def worker():
@@ -277,20 +317,39 @@ class DemoController:
             self.status.update(state="idle", banner=None)
         threading.Thread(target=worker, daemon=True).start()
 
+    @staticmethod
+    def _resolve_own_replay(scenario: str, before: set) -> Path | None:
+        """Pick the replay this serve hop created — not a sibling port's newer run."""
+        after = set(glob.glob(str(REPO / "runs" / f"*-{scenario}" / "replay.jsonl")))
+        created = [Path(p) for p in (after - before)]
+        if created:
+            return max(created, key=lambda p: p.stat().st_mtime)
+        if after:
+            return Path(max(after, key=os.path.getmtime))
+        return None
+
     def _play_research(self, question: str, tick_ms: int = 500,
                        model: str | None = None):
         """M12: full-live run of a typed-in question, then animate its replay.
         The dashboard never blocks on the ~2min run; status shows 'preparing'.
-        `model` (if set) becomes LIVE_MODEL for planner + live agents."""
+        `model` (if set) becomes LIVE_MODEL for planner + live agents.
+        Pre-allocates OOAA_RUN_DIR so multi-port serves never steal each other's
+        newest glob hit, and parks the feed on the final frame when done."""
         if model:
             err = self.set_live_model(model)
             if err:
                 self.status.update(state="idle")
                 return
+        self._clear_feed()
+        ts = time.strftime("%Y%m%d-%H%M%S") + f"-research-s{os.getpid()}"
+        run_dir = REPO / "runs" / ts
+        run_dir.mkdir(parents=True, exist_ok=True)
+        self.run_dir = run_dir
         self.status.update(state="preparing", scenario="research", banner=None,
                            tick_ms=tick_ms)
-        env = os.environ.copy()
+        env = self._child_env()
         env["LIVE_MODEL"] = self.live_model
+        env["OOAA_RUN_DIR"] = str(run_dir)
         try:
             subprocess.run([sys.executable, str(REPO / "run.py"), "--research",
                             question], cwd=str(REPO), env=env,
@@ -298,24 +357,34 @@ class DemoController:
         except Exception:
             self.status.update(state="idle")
             return
-        files = glob.glob(str(REPO / "runs" / "*-research" / "replay.jsonl"))
-        if not files:
+        replay = run_dir / "replay.jsonl"
+        # Child writes live_cost.json only after orch quiesces — wait for it so
+        # we never open a half-flushed replay (the "stuck at N4 running" bug).
+        for _ in range(100):
+            if (run_dir / "live_cost.json").exists() and replay.exists():
+                break
+            time.sleep(0.1)
+        if not replay.exists():
             self.status.update(state="idle")
             return
-        newest = Path(max(files, key=os.path.getmtime))
-        self.run_dir = newest.parent
-        plan = newest.parent / "plan_live.json"
+        time.sleep(0.15)                       # let final jsonl flush settle
+        plan = run_dir / "plan_live.json"
         if plan.exists():
-            self.plan_path = plan                # header question follows the run
-        self._swap_feed(_ReplayFeed(newest, adv_s=tick_ms / 1000.0))
+            self.plan_path = plan
+        feed = _ReplayFeed(replay, adv_s=tick_ms / 1000.0)
+        feed.reload()
+        self._swap_feed(feed)
         self.status.update(state="playing")
         while not self.feed.done:
             time.sleep(0.1)
         time.sleep(2.5)                          # hold the final frame
+        self.feed.snap_to_end()
 
     def run_research(self, question: str, model: str | None = None):
         def worker():
             self._play_research(question, model=model)
+            if self.feed:
+                self.feed.snap_to_end()
             self.status.update(state="idle", banner=None)
         threading.Thread(target=worker, daemon=True).start()
 
@@ -368,13 +437,42 @@ class DemoController:
             # compute_script (in-memory override — the plan file keeps sim_train)
             sc = self._read_yaml(REPO / "scenarios" / "live_research.yaml")
             compute = (sc or {}).get("compute_script") or compute
+        report_path = None
+        verdict = None
+        if rd:
+            rpt = rd / "report" / "report.md"
+            if not rpt.exists():
+                rpt = rd / "report.md"
+            if rpt.exists():
+                report_path = str(rpt.resolve())
+                verdict = self._verdict_from_report(rpt)
         return {"question": plan.get("research_question", ""),
                 "compute": compute,
                 "bait": self._bait_signals(rd, planner, lineup),
                 "run_dir": rd.name if rd else None,
+                "run_path": str(rd.resolve()) if rd else None,
+                "report_path": report_path,
+                "verdict": verdict,
                 "planner": planner,
                 "lineup": lineup,
                 "live_cost": (self._read_json(rd / "live_cost.json") if rd else None)}
+
+    @staticmethod
+    def _verdict_from_report(rpt: Path) -> str | None:
+        """Pull the first non-empty line under ## Verdict from report.md."""
+        try:
+            lines = Path(rpt).read_text(encoding="utf-8").splitlines()
+        except Exception:
+            return None
+        hit = False
+        for ln in lines:
+            if hit:
+                s = ln.strip()
+                if s:
+                    return s
+            elif ln.strip().lower().startswith("## verdict"):
+                hit = True
+        return None
 
     def prompts(self) -> dict:
         """Full prompt texts for the Prompt tab. Briefs of live nodes are rebuilt
@@ -651,6 +749,7 @@ async def run_live_research() -> RunResult:
     live_cfg = scenario.live or {}
     if scenario.compute_script:
         _apply_compute_override(g, scenario.compute_script)
+    _pin_long_train_models(g, g.research_question)
     ts = time.strftime("%Y%m%d-%H%M%S") + "-live_research"
     run_dir = REPO / "runs" / ts
     print(f"LIVE live_research (M12 role-driven): enable={sorted(_legacy_enable(live_cfg, g))}; "
@@ -666,10 +765,16 @@ async def run_live_research() -> RunResult:
 
 
 def _apply_compute_override(g, script: str) -> None:
-    """Point the (single) long node's compute at `script` — kind-keyed, not id."""
+    """Point long nodes' compute at `script` — kind-keyed, not id."""
     for n in g.nodes.values():
         if n.kind == schema.Kind.LONG and n.compute:
             n.compute.cmd[1] = script
+
+
+def _pin_long_train_models(g, question: str) -> dict:
+    """Allowlisted --model on every long compute.cmd (gbdt|ridge|lasso|tree)."""
+    from runtime.train_zoo import pin_long_models
+    return pin_long_models(g, question)
 
 
 async def _run_live_graph(g, scenario, run_dir: Path, enable: set,
@@ -731,11 +836,18 @@ async def _run_live_graph(g, scenario, run_dir: Path, enable: set,
 async def run_research(question: str, bait: bool = False):
     """M12 real-life path + M17 free topology: one sentence in -> free planner
     (role-completeness validated, error-feedback retry <=3) -> role-anchored
-    live execution (FreeOrchestrator) -> report."""
+    live execution (FreeOrchestrator) -> report.
+    If OOAA_RUN_DIR is set (dashboard multi-port), reuse that directory so the
+    parent serve never has to glob 'newest research' across sibling ports."""
     from graph import planner
     from runtime import roles
-    ts = time.strftime("%Y%m%d-%H%M%S") + "-research" + ("-bait" if bait else "")
-    run_dir = REPO / "runs" / ts
+    override = (os.environ.get("OOAA_RUN_DIR") or "").strip()
+    if override:
+        run_dir = Path(override)
+        run_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        ts = time.strftime("%Y%m%d-%H%M%S") + "-research" + ("-bait" if bait else "")
+        run_dir = REPO / "runs" / ts
     plan = planner.generate_plan_retry(question, run_dir,
                                        REPO / "graph" / "plan_cached.json",
                                        free=True)
@@ -750,6 +862,9 @@ async def run_research(question: str, bait: bool = False):
     scenario = load_scenario(REPO / "scenarios" / "live_research.yaml")
     if scenario.compute_script:
         _apply_compute_override(g, scenario.compute_script)
+    models = _pin_long_train_models(g, question)
+    if models:
+        print(f"train zoo: {models}")
     bait_dir = roles.make_bait_dataset(REPO) if bait else None
     try:
         result, cost, lineup = await _run_live_graph(

@@ -25,6 +25,12 @@ _SYSTEM = (
 )
 
 
+def _trainer_planner_hint() -> str:
+    """Long-node compute cmd hint; allowlist comes from trainer registry."""
+    from runtime.trainers import planner_hint
+    return planner_hint()
+
+
 def _user_prompt(question: str, template_json: str, feedback: str | None = None) -> str:
     fb = ""
     if feedback:
@@ -61,7 +67,8 @@ def _user_prompt_free(question: str, example_json: str,
         "2. every experiment node is downstream of a harness node (artifact edges)\n"
         "3. every analysis node has >=2 experiment nodes among its transitive inputs\n"
         "4. every long node carries a compute block (cmd/profile/steps/"
-        "ckpt_every_pct/metrics_file/ckpt_dir)\n"
+        "ckpt_every_pct/metrics_file/ckpt_dir). For method training use EXACTLY:\n"
+        f"   {_trainer_planner_hint()}\n"
         "5. node ids are free-form, node count is free\n"
         "Node keys: id, kind(fast|long|reactive), resource(cpu|gpu; long=gpu, "
         "others=cpu), role, seed, [metric], [expected_score], [acceptance argv], "

@@ -98,12 +98,26 @@ class Orchestrator:
             streams.append((src, ev))
 
     # ------------------------------------------------------------ long nodes
+    def _long_argv(self, node) -> list[str]:
+        """Launch argv for a long node. Keeps scenario.profile (mock law) and
+        forwards an allowlisted --model from compute.cmd when present (method zoo)."""
+        script = self.repo_root / node.compute.cmd[1]
+        argv = [sys.executable, str(script), "--profile", self.scenario.profile]
+        cmd = node.compute.cmd or []
+        for i, tok in enumerate(cmd):
+            if tok == "--model" and i + 1 < len(cmd):
+                argv.extend(["--model", str(cmd[i + 1])])
+                break
+            if isinstance(tok, str) and tok.startswith("--model="):
+                argv.extend(["--model", tok.split("=", 1)[1]])
+                break
+        return argv
+
     async def _start_long(self, nid):
         node = self.g.nodes[nid]
         scope = self._scope(nid)
         (scope / node.compute.ckpt_dir).mkdir(parents=True, exist_ok=True)
-        script = self.repo_root / node.compute.cmd[1]
-        argv = [sys.executable, str(script), "--profile", self.scenario.profile]
+        argv = self._long_argv(node)
         proc = await asyncio.create_subprocess_exec(
             *argv, cwd=str(scope),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -204,8 +218,7 @@ class Orchestrator:
         L = self.long.get(nid)
         await self._terminate(L.proc if L else None)
         node = self.g.nodes[nid]
-        script = self.repo_root / node.compute.cmd[1]
-        argv = [sys.executable, str(script), "--profile", self.scenario.profile]
+        argv = self._long_argv(node)
         proc = await asyncio.create_subprocess_exec(
             *argv, cwd=str(self._scope(nid)),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
